@@ -1,3 +1,4 @@
+use crate::compat;
 use bdk_core::collections::{BTreeMap, BTreeSet, HashSet};
 use bdk_core::spk_client::{
     FullScanRequest, FullScanResponse, SpkWithExpectedTxids, SyncRequest, SyncResponse,
@@ -174,7 +175,7 @@ fn fetch_latest_blocks(
     Ok(client
         .get_block_infos(None)?
         .into_iter()
-        .map(|b| (b.height, b.id))
+        .map(|b| (b.height, compat::blockhash_from_032(b.id)))
         .collect())
 }
 
@@ -204,7 +205,7 @@ fn fetch_block(
         }
     }
 
-    Ok(Some(client.get_block_hash(height)?))
+    Ok(Some(compat::blockhash_from_032(client.get_block_hash(height)?)))
 }
 
 /// Create the [`local_chain::Update`].
@@ -244,7 +245,7 @@ fn chain_update(
         Some(tip) => tip,
         None => {
             return Err(Box::new(esplora_client::Error::HeaderHashNotFound(
-                local_cp_hash,
+                compat::blockhash_to_032(local_cp_hash),
             )));
         }
     };
@@ -303,7 +304,7 @@ fn fetch_txs_with_keychain_spks<I: Iterator<Item = Indexed<SpkWithExpectedTxids>
                     let mut last_txid = None;
                     let mut spk_txs = Vec::new();
                     loop {
-                        let txs = client.scripthash_txs(&spk, last_txid)?;
+                        let txs = client.scripthash_txs(compat::spk_to_032(&spk), last_txid)?;
                         let tx_count = txs.len();
                         last_txid = txs.last().map(|tx| tx.txid);
                         spk_txs.extend(txs);
@@ -311,7 +312,10 @@ fn fetch_txs_with_keychain_spks<I: Iterator<Item = Indexed<SpkWithExpectedTxids>
                             break;
                         }
                     }
-                    let got_txids = spk_txs.iter().map(|tx| tx.txid).collect::<HashSet<_>>();
+                    let got_txids = spk_txs
+                        .iter()
+                        .map(|tx| compat::txid_from_032(tx.txid))
+                        .collect::<HashSet<_>>();
                     let evicted_txids = expected_txids
                         .difference(&got_txids)
                         .copied()
@@ -335,10 +339,11 @@ fn fetch_txs_with_keychain_spks<I: Iterator<Item = Indexed<SpkWithExpectedTxids>
             }
 
             for tx in txs {
-                if inserted_txs.insert(tx.txid) {
-                    update.txs.push(tx.to_tx().into());
+                let txid = compat::txid_from_032(tx.txid);
+                if inserted_txs.insert(txid) {
+                    update.txs.push(compat::tx_from_032(&tx.to_tx()).into());
                 }
-                insert_anchor_or_seen_at_from_status(&mut update, start_time, tx.txid, tx.status);
+                insert_anchor_or_seen_at_from_status(&mut update, start_time, txid, tx.status);
                 insert_prevouts(&mut update, tx.vin);
             }
             update
@@ -409,7 +414,7 @@ fn fetch_txs_with_txids<I: IntoIterator<Item = Txid>>(
                 let client = client.clone();
                 std::thread::spawn(move || {
                     client
-                        .get_tx_info(&txid)
+                        .get_tx_info(&compat::txid_to_032(txid))
                         .map_err(Box::new)
                         .map(|t| (txid, t))
                 })
@@ -424,7 +429,7 @@ fn fetch_txs_with_txids<I: IntoIterator<Item = Txid>>(
             let (txid, tx_info) = handle.join().expect("thread must not panic")?;
             if let Some(tx_info) = tx_info {
                 if inserted_txs.insert(txid) {
-                    update.txs.push(tx_info.to_tx().into());
+                    update.txs.push(compat::tx_from_032(&tx_info.to_tx()).into());
                 }
                 insert_anchor_or_seen_at_from_status(&mut update, start_time, txid, tx_info.status);
                 insert_prevouts(&mut update, tx_info.vin);
@@ -471,7 +476,7 @@ fn fetch_txs_with_outpoints<I: IntoIterator<Item = OutPoint>>(
                 let client = client.clone();
                 std::thread::spawn(move || {
                     client
-                        .get_output_status(&op.txid, op.vout as _)
+                        .get_output_status(&compat::txid_to_032(op.txid), op.vout as _)
                         .map_err(Box::new)
                 })
             })
@@ -484,7 +489,7 @@ fn fetch_txs_with_outpoints<I: IntoIterator<Item = OutPoint>>(
         for handle in handles {
             if let Some(op_status) = handle.join().expect("thread must not panic")? {
                 let spend_txid = match op_status.txid {
-                    Some(txid) => txid,
+                    Some(txid) => compat::txid_from_032(txid),
                     None => continue,
                 };
                 if !inserted_txs.contains(&spend_txid) {
@@ -523,13 +528,14 @@ mod test {
     use bdk_chain::BlockId;
     use bdk_core::ConfirmationBlockTime;
     use bdk_testenv::{anyhow, TestEnv};
-    use esplora_client::{BlockHash, Builder};
+    use bdk_core::bitcoin::BlockHash;
+    use esplora_client::Builder;
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     macro_rules! h {
         ($index:literal) => {{
-            bdk_chain::bitcoin::hashes::Hash::hash($index.as_bytes())
+            bdk_testenv::utils::TestHash::hash_data($index.as_bytes())
         }};
     }
 
@@ -558,15 +564,17 @@ mod test {
         assert!(!latest_blocks.is_empty());
         assert_eq!(latest_blocks.keys().last(), Some(&mine_to));
 
-        let genesis_hash =
-            bitcoin::constants::genesis_block(bitcoin::Network::Testnet4).block_hash();
+        let genesis_hash = bitcoin::constants::genesis_block(bitcoin::Network::Testnet(
+            bitcoin::TestnetVersion::V4,
+        ))
+        .block_hash();
         let cp = bdk_chain::CheckPoint::new(0, genesis_hash);
 
         let anchors = BTreeSet::new();
         let res = chain_update(&client, &latest_blocks, &cp, &anchors);
         use esplora_client::Error;
         assert!(
-            matches!(*res.unwrap_err(), Error::HeaderHashNotFound(hash) if hash == genesis_hash),
+            matches!(*res.unwrap_err(), Error::HeaderHashNotFound(hash) if hash == crate::compat::blockhash_to_032(genesis_hash)),
             "`chain_update` should error if it can't connect to the local CP",
         );
 
@@ -643,15 +651,11 @@ mod test {
                             ConfirmationBlockTime {
                                 block_id: BlockId {
                                     height,
-                                    hash: env
-                                        .bitcoind
-                                        .client
-                                        .get_block_hash(height as _)?
-                                        .block_hash()?,
+                                    hash: env.get_block_hash(height as _)?,
                                 },
                                 confirmation_time: height as _,
                             },
-                            Txid::all_zeros(),
+                            Txid::from_byte_array([0; 32]),
                         ))
                     })
                     .collect::<anyhow::Result<BTreeSet<_>>>()?;
@@ -686,11 +690,7 @@ mod test {
                             ConfirmationBlockTime {
                                 block_id: BlockId {
                                     height,
-                                    hash: env
-                                        .bitcoind
-                                        .client
-                                        .get_block_hash(height as _)?
-                                        .block_hash()?,
+                                    hash: env.get_block_hash(height as _)?,
                                 },
                                 confirmation_time: height as _,
                             },
@@ -755,8 +755,8 @@ mod test {
             let bitcoind_client = &env.bitcoind.client;
             assert_eq!(bitcoind_client.get_block_count()?.0, 1);
             [
-                (0, bitcoind_client.get_block_hash(0)?.block_hash()?),
-                (1, bitcoind_client.get_block_hash(1)?.block_hash()?),
+                (0, env.get_block_hash(0)?),
+                (1, env.get_block_hash(1)?),
             ]
             .into_iter()
             .chain((2..).zip(env.mine_blocks((TIP_HEIGHT - 1) as usize, None)?))
@@ -875,10 +875,10 @@ mod test {
                 .request_heights
                 .iter()
                 .map(|&h| {
-                    let anchor_blockhash: BlockHash = bdk_chain::bitcoin::hashes::Hash::hash(
+                    let anchor_blockhash: BlockHash = bdk_testenv::utils::TestHash::hash_data(
                         &format!("hash_at_height_{h}").into_bytes(),
                     );
-                    let txid: Txid = bdk_chain::bitcoin::hashes::Hash::hash(
+                    let txid: Txid = bdk_testenv::utils::TestHash::hash_data(
                         &format!("txid_at_height_{h}").into_bytes(),
                     );
                     let anchor = ConfirmationBlockTime {

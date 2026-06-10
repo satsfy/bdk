@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use bdk_core::bitcoin::key::{Secp256k1, UntweakedPublicKey};
-use bdk_core::bitcoin::{Address, ScriptBuf};
+use bdk_core::bitcoin::script::ScriptPubKeyBufExt as _;
+use bdk_core::bitcoin::{Address, ScriptPubKeyBuf, XOnlyPublicKey};
 use std::str::FromStr;
 
 const PK_BYTES: &[u8] = &[
@@ -9,10 +9,10 @@ const PK_BYTES: &[u8] = &[
     114, 89, 165, 83, 141, 8, 203, 93, 240, 53, 101,
 ];
 
-pub fn get_test_spk() -> ScriptBuf {
-    let secp = Secp256k1::new();
-    let pk = UntweakedPublicKey::from_slice(PK_BYTES).expect("Must be valid PK");
-    ScriptBuf::new_p2tr(&secp, pk, None)
+pub fn get_test_spk() -> ScriptPubKeyBuf {
+    let pk = XOnlyPublicKey::from_byte_array(PK_BYTES.try_into().expect("must be 32 bytes"))
+        .expect("Must be valid PK");
+    ScriptPubKeyBuf::new_p2tr(pk, None)
 }
 
 pub fn test_addresses() -> Vec<Address> {

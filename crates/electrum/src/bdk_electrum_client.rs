@@ -1,7 +1,9 @@
+use crate::compat;
 use bdk_core::{
     bitcoin::{
         block::Header,
-        opcodes::{all::OP_RETURN, OP_FALSE},
+        opcodes::all::{OP_FALSE, OP_RETURN},
+        script::ScriptPubKeyExt as _,
         BlockHash, OutPoint, Transaction, Txid,
     },
     collections::{BTreeMap, HashMap, HashSet},
@@ -81,7 +83,9 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
 
         drop(tx_cache);
 
-        let tx = Arc::new(self.inner.transaction_get(&txid)?);
+        let tx = Arc::new(compat::tx_from_032(
+            &self.inner.transaction_get(&compat::txid_to_032(txid))?,
+        ));
         let returned_txid = tx.compute_txid();
         if returned_txid != txid {
             return Err(Error::Message(format!(
@@ -98,7 +102,9 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
     ///
     /// This is a re-export of [`ElectrumApi::transaction_broadcast`].
     pub fn transaction_broadcast(&self, tx: &Transaction) -> Result<Txid, Error> {
-        self.inner.transaction_broadcast(tx)
+        self.inner
+            .transaction_broadcast(&compat::tx_to_032(tx))
+            .map(compat::txid_from_032)
     }
 
     /// Full scan the keychain scripts specified with the blockchain (via an Electrum client) and
@@ -304,7 +310,9 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
 
             let spk_histories = self
                 .inner
-                .batch_script_get_history(spks.iter().map(|(_, s)| s.spk.as_script()))?;
+                .batch_script_get_history(spks.iter().map(|(_, s)| compat::spk_to_032(&s.spk)))?
+                .into_iter()
+                .map(compat::history_from_032);
 
             for ((spk_index, spk), spk_history) in spks.into_iter().zip(spk_histories) {
                 let beyond_revealed = last_revealed.is_none_or(|lr| spk_index > lr);
@@ -361,7 +369,7 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
         let mut ops_spks_txs = Vec::new();
         for op in outpoints {
             if let Ok(tx) = self.fetch_tx(op.txid) {
-                if let Some(txout) = tx.output.get(op.vout as usize) {
+                if let Some(txout) = tx.outputs.get(op.vout as usize) {
                     ops_spks_txs.push((op, txout.script_pubkey.clone(), tx));
                 }
             }
@@ -376,7 +384,9 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
             .collect();
         let histories = self
             .inner
-            .batch_script_get_history(unique_spks.iter().map(|spk| spk.as_script()))?;
+            .batch_script_get_history(unique_spks.iter().map(|spk| compat::spk_to_032(spk)))?
+            .into_iter()
+            .map(compat::history_from_032);
         let mut spk_map = HashMap::new();
         for (spk, history) in unique_spks.into_iter().zip(histories) {
             spk_map.insert(spk, history);
@@ -410,7 +420,7 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
                         let res_tx = self.fetch_tx(res.tx_hash)?;
                         // we exclude txs/anchors that do not spend our specified outpoint(s)
                         has_spending = res_tx
-                            .input
+                            .inputs
                             .iter()
                             .any(|txin| txin.previous_output == outpoint);
                         if !has_spending {
@@ -448,7 +458,7 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
             match self.fetch_tx(txid) {
                 Ok(tx) => {
                     // pick the first output Electrum will return history for
-                    let mut spk = tx.output.iter().find_map(|txo| {
+                    let mut spk = tx.outputs.iter().find_map(|txo| {
                         let script = &txo.script_pubkey;
                         (!script.is_op_return()
                             && !script
@@ -460,11 +470,11 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
                     // fallback: if no output is indexable, use the spk of any input's
                     // previous output, its history includes our tx since we spend from it
                     if spk.is_none() && !tx.is_coinbase() {
-                        for txin in &tx.input {
+                        for txin in &tx.inputs {
                             match self.fetch_tx(txin.previous_output.txid) {
                                 Ok(parent) => {
                                     if let Some(prev_out) =
-                                        parent.output.get(txin.previous_output.vout as usize)
+                                        parent.outputs.get(txin.previous_output.vout as usize)
                                     {
                                         spk = Some(prev_out.script_pubkey.clone());
                                         break;
@@ -494,7 +504,9 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
         // call to get confirmation status of our transaction
         let spk_histories = self
             .inner
-            .batch_script_get_history(scripts.iter().map(|spk| spk.as_script()))?;
+            .batch_script_get_history(scripts.iter().map(|spk| compat::spk_to_032(spk)))?
+            .into_iter()
+            .map(compat::history_from_032);
 
         for (tx, spk_history) in txs.into_iter().zip(spk_histories) {
             if let Some(res) = spk_history.into_iter().find(|res| res.tx_hash == tx.0) {
@@ -545,7 +557,11 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
             }
 
             if !missing_heights.is_empty() {
-                let headers = self.inner.batch_block_header(missing_heights.clone())?;
+                let headers = self
+                    .inner
+                    .batch_block_header(missing_heights.clone())?
+                    .into_iter()
+                    .map(compat::header_from_032);
                 for (height, header) in missing_heights.into_iter().zip(headers) {
                     height_to_hash.insert(height, header.block_hash());
                     cache.insert(height, header);
@@ -568,7 +584,11 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
         }
 
         // Fetch merkle proofs.
-        let proofs = self.inner.batch_transaction_get_merkle(to_fetch.iter())?;
+        let to_fetch_032: Vec<(compat::bitcoin_032::Txid, usize)> = to_fetch
+            .iter()
+            .map(|&(txid, height)| (compat::txid_to_032(txid), height))
+            .collect();
+        let proofs = self.inner.batch_transaction_get_merkle(to_fetch_032.iter())?;
 
         // Validate each proof, retrying once for each stale header.
         for ((txid, height), proof) in to_fetch.into_iter().zip(proofs) {
@@ -579,17 +599,20 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
                     .copied()
                     .expect("header already fetched above")
             };
-            let mut valid =
-                electrum_client::utils::validate_merkle_proof(&txid, &header.merkle_root, &proof);
+            let mut valid = electrum_client::utils::validate_merkle_proof(
+                &compat::txid_to_032(txid),
+                &compat::merkle_node_to_032(header.merkle_root),
+                &proof,
+            );
             if !valid {
-                header = self.inner.block_header(height)?;
+                header = compat::header_from_032(self.inner.block_header(height)?);
                 self.block_header_cache
                     .lock()
                     .unwrap()
                     .insert(height as u32, header);
                 valid = electrum_client::utils::validate_merkle_proof(
-                    &txid,
-                    &header.merkle_root,
+                    &compat::txid_to_032(txid),
+                    &compat::merkle_node_to_032(header.merkle_root),
                     &proof,
                 );
             }
@@ -598,7 +621,7 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
             if valid {
                 let hash = header.block_hash();
                 let anchor = ConfirmationBlockTime {
-                    confirmation_time: header.time as u64,
+                    confirmation_time: u64::from(header.time.to_u32()),
                     block_id: BlockId {
                         height: height as u32,
                         hash,
@@ -625,13 +648,13 @@ impl<E: ElectrumApi> BdkElectrumClient<E> {
         let mut no_dup = HashSet::<Txid>::new();
         for tx in &tx_update.txs {
             if !tx.is_coinbase() && no_dup.insert(tx.compute_txid()) {
-                for vin in &tx.input {
+                for vin in &tx.inputs {
                     let outpoint = vin.previous_output;
                     let vout = outpoint.vout;
                     let prev_tx = self.fetch_tx(outpoint.txid)?;
                     // Ensure server returns the expected txout.
                     let txout = prev_tx
-                        .output
+                        .outputs
                         .get(vout as usize)
                         .ok_or_else(|| {
                             electrum_client::Error::Message(format!(
@@ -670,7 +693,7 @@ fn fetch_tip_and_latest_blocks(
             .block_headers(start_height as _, CHAIN_SUFFIX_LENGTH as _)?
             .headers
             .into_iter()
-            .map(|h| h.block_hash());
+            .map(|h| compat::blockhash_from_032(h.block_hash()));
         (start_height..).zip(hashes).collect::<BTreeMap<u32, _>>()
     };
 
@@ -686,7 +709,9 @@ fn fetch_tip_and_latest_blocks(
                         new_tip_height >= cp_block.height,
                         "already checked that electrum's tip cannot be smaller"
                     );
-                    let hash = client.block_header(cp_block.height as _)?.block_hash();
+                    let hash = compat::blockhash_from_032(
+                        client.block_header(cp_block.height as _)?.block_hash(),
+                    );
                     new_blocks.insert(cp_block.height, hash);
                     hash
                 }
@@ -741,9 +766,9 @@ fn chain_update(
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[allow(unused_imports)]
 mod test {
-    use crate::{bdk_electrum_client::TxUpdate, electrum_client::ElectrumApi, BdkElectrumClient};
+    use crate::{bdk_electrum_client::TxUpdate, compat, electrum_client::ElectrumApi, BdkElectrumClient};
     use bdk_chain::bitcoin::Amount;
-    use bdk_chain::bitcoin::{constants, Network, OutPoint, ScriptBuf, Transaction, TxIn};
+    use bdk_chain::bitcoin::{constants, Network, OutPoint, ScriptPubKeyBuf, Transaction, TxIn};
     use bdk_chain::CheckPoint;
     use bdk_core::{collections::BTreeMap, spk_client::SyncRequest};
     use bdk_testenv::{anyhow, utils::new_tx, TestEnv};
@@ -761,9 +786,9 @@ mod test {
 
         // Create a coinbase transaction.
         let coinbase_tx = Transaction {
-            input: vec![TxIn {
-                previous_output: OutPoint::null(),
-                ..Default::default()
+            inputs: vec![TxIn {
+                previous_output: OutPoint::COINBASE_PREVOUT,
+                ..TxIn::EMPTY_COINBASE
             }],
             ..new_tx(0)
         };
@@ -791,8 +816,10 @@ mod test {
 
         let _ = env.mine_blocks(1, None).unwrap();
 
-        let bogus_spks: Vec<ScriptBuf> = Vec::new();
-        let bogus_genesis = constants::genesis_block(Network::Testnet).block_hash();
+        let bogus_spks: Vec<ScriptPubKeyBuf> = Vec::new();
+        let bogus_genesis =
+            constants::genesis_block(Network::Testnet(bdk_chain::bitcoin::TestnetVersion::V3))
+                .block_hash();
         let bogus_cp = CheckPoint::new(0, bogus_genesis);
 
         let req = SyncRequest::builder()
@@ -827,12 +854,13 @@ mod test {
 
         env.mine_blocks(101, None)?;
 
-        let addr = env
-            .rpc_client()
-            .get_new_address(None, None)?
-            .address()?
-            .assume_checked();
-        let txid = env.send(&addr, Amount::from_sat(50_000))?;
+        let addr = bdk_testenv::compat::address_from_032(
+            &env.rpc_client()
+                .get_new_address(None, None)?
+                .address()?
+                .assume_checked(),
+        );
+        let txid = env.send(&addr, Amount::from_sat_u32(50_000))?;
 
         // Mine block that confirms transaction.
         env.mine_blocks(1, None)?;
@@ -840,7 +868,7 @@ mod test {
         let height: u32 = env.rpc_client().get_block_count()?.into_model().0 as u32;
 
         // Add the pre-reorg block that the tx is confirmed in to the header cache.
-        let header = electrum_client.inner.block_header(height as usize)?;
+        let header = compat::header_from_032(electrum_client.inner.block_header(height as usize)?);
         {
             electrum_client
                 .block_header_cache
@@ -857,7 +885,7 @@ mod test {
         let anchors = electrum_client.batch_fetch_anchors(&[(txid, height as usize)])?;
         assert_eq!(anchors.len(), 1);
 
-        let new_header = electrum_client.inner.block_header(height as usize)?;
+        let new_header = compat::header_from_032(electrum_client.inner.block_header(height as usize)?);
         let new_hash = new_header.block_hash();
 
         // Anchor should contain new hash.

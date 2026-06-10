@@ -5,6 +5,7 @@ use bdk_chain::spk_txout::SpkTxOutIndex;
 use bdk_chain::{ConfirmationBlockTime, IndexedTxGraph, TxGraph};
 use bdk_esplora::EsploraExt;
 use bdk_testenv::bitcoind::{Input, Output};
+use bdk_testenv::compat::{self, bitcoin_032};
 use bdk_testenv::{anyhow, TestEnv};
 use esplora_client::{self, Builder};
 use std::collections::{BTreeSet, HashSet};
@@ -20,8 +21,8 @@ mod common;
 // replaced transaction as missing.
 #[test]
 pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
-    const SEND_TX_FEE: Amount = Amount::from_sat(1000);
-    const UNDO_SEND_TX_FEE: Amount = Amount::from_sat(2000);
+    const SEND_TX_FEE: Amount = Amount::from_sat_u32(1000);
+    const UNDO_SEND_TX_FEE: Amount = Amount::from_sat_u32(2000);
 
     let env = TestEnv::new()?;
     let rpc_client = env.rpc_client();
@@ -44,13 +45,13 @@ pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
         .0
         .into_iter()
         // Find a block reward tx.
-        .find(|utxo| utxo.amount == Amount::from_int_btc(50).to_btc())
+        .find(|utxo| utxo.amount == Amount::from_btc_u16(50).to_btc())
         .expect("Must find a block reward UTXO")
         .into_model()?;
 
     // Derive the sender's address from the selected UTXO.
     let sender_spk = selected_utxo.script_pubkey.clone();
-    let sender_addr = Address::from_script(&sender_spk, bdk_chain::bitcoin::Network::Regtest)
+    let sender_addr = bitcoin_032::Address::from_script(&sender_spk, bitcoin_032::Network::Regtest)
         .expect("Failed to derive address from UTXO");
 
     // Setup the common inputs used by both `send_tx` and `undo_send_tx`.
@@ -62,36 +63,44 @@ pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
 
     // Create and sign the `send_tx` that sends funds to the receiver address.
     let send_tx_outputs = [Output::new(
-        receiver_addr,
-        selected_utxo.amount - SEND_TX_FEE,
+        compat::address_to_032(&receiver_addr),
+        selected_utxo.amount - compat::amount_to_032(SEND_TX_FEE),
     )];
 
     let send_tx = rpc_client
         .create_raw_transaction(&inputs, &send_tx_outputs)?
         .into_model()?
         .0;
-    let send_tx = rpc_client
-        .sign_raw_transaction_with_wallet(&send_tx)?
-        .into_model()?
-        .tx;
+    let send_tx = compat::tx_from_032(
+        &rpc_client
+            .sign_raw_transaction_with_wallet(&send_tx)?
+            .into_model()?
+            .tx,
+    );
 
     // Create and sign the `undo_send_tx` transaction. This redirects funds back to the sender
     // address.
     let undo_send_outputs = [Output::new(
         sender_addr,
-        selected_utxo.amount - UNDO_SEND_TX_FEE,
+        selected_utxo.amount - compat::amount_to_032(UNDO_SEND_TX_FEE),
     )];
     let undo_send_tx = rpc_client
         .create_raw_transaction(&inputs, &undo_send_outputs)?
         .into_model()?
         .0;
-    let undo_send_tx = rpc_client
-        .sign_raw_transaction_with_wallet(&undo_send_tx)?
-        .into_model()?
-        .tx;
+    let undo_send_tx = compat::tx_from_032(
+        &rpc_client
+            .sign_raw_transaction_with_wallet(&undo_send_tx)?
+            .into_model()?
+            .tx,
+    );
 
     // Sync after broadcasting the `send_tx`. Ensure that we detect and receive the `send_tx`.
-    let send_txid = env.rpc_client().send_raw_transaction(&send_tx)?.txid()?;
+    let send_txid = compat::txid_from_032(
+        env.rpc_client()
+            .send_raw_transaction(&compat::tx_to_032(&send_tx))?
+            .txid()?,
+    );
     env.wait_until_electrum_sees_txid(send_txid, Duration::from_secs(6))?;
     let sync_request = SyncRequest::builder()
         .chain_tip(chain.tip())
@@ -118,10 +127,11 @@ pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
 
     // Sync after broadcasting the `undo_send_tx`. Verify that `send_tx` is now missing from the
     // mempool.
-    let undo_send_txid = env
-        .rpc_client()
-        .send_raw_transaction(&undo_send_tx)?
-        .txid()?;
+    let undo_send_txid = compat::txid_from_032(
+        env.rpc_client()
+            .send_raw_transaction(&compat::tx_to_032(&undo_send_tx))?
+            .txid()?,
+    );
     env.wait_until_electrum_sees_txid(undo_send_txid, Duration::from_secs(6))?;
     let sync_request = SyncRequest::builder()
         .chain_tip(chain.tip())
@@ -169,13 +179,21 @@ pub fn test_update_tx_graph_without_keychain() -> anyhow::Result<()> {
     let txid1 = env
         .bitcoind
         .client
-        .send_to_address(&receive_address1, Amount::from_sat(10000))?
-        .txid()?;
+        .send_to_address(
+            &compat::address_to_032(&receive_address1),
+            bitcoin_032::Amount::from_sat(10000),
+        )?
+        .txid()
+        .map(compat::txid_from_032)?;
     let txid2 = env
         .bitcoind
         .client
-        .send_to_address(&receive_address0, Amount::from_sat(20000))?
-        .txid()?;
+        .send_to_address(
+            &compat::address_to_032(&receive_address0),
+            bitcoin_032::Amount::from_sat(20000),
+        )?
+        .txid()
+        .map(compat::txid_from_032)?;
     let _block_hashes = env.mine_blocks(1, None)?;
     while client.get_height().unwrap() < 102 {
         sleep(Duration::from_millis(10))
@@ -224,17 +242,14 @@ pub fn test_update_tx_graph_without_keychain() -> anyhow::Result<()> {
         let tx_fee = env
             .bitcoind
             .client
-            .get_transaction(tx.compute_txid())
+            .get_transaction(compat::txid_to_032(tx.compute_txid()))
             .expect("Tx must exist")
             .fee
             .expect("Fee must exist")
             .abs();
 
         // Check that the calculated fee matches the fee from the transaction data.
-        assert_eq!(
-            fee,
-            Amount::from_float_in(tx_fee, bdk_core::bitcoin::Denomination::Bitcoin)?
-        );
+        assert_eq!(fee, Amount::from_btc(tx_fee)?);
     }
 
     assert_eq!(
@@ -268,9 +283,12 @@ pub fn test_update_tx_graph_stop_gap() -> anyhow::Result<()> {
     let txid_4th_addr = env
         .bitcoind
         .client
-        .send_to_address(&addresses[3], Amount::from_sat(10000))?
-        .into_model()?
-        .txid;
+        .send_to_address(
+            &compat::address_to_032(&addresses[3]),
+            bitcoin_032::Amount::from_sat(10000),
+        )?
+        .into_model()
+        .map(|m| compat::txid_from_032(m.txid))?;
     let _block_hashes = env.mine_blocks(1, None)?;
     while client.get_height().unwrap() < 103 {
         sleep(Duration::from_millis(10))
@@ -310,8 +328,12 @@ pub fn test_update_tx_graph_stop_gap() -> anyhow::Result<()> {
     let txid_last_addr = env
         .bitcoind
         .client
-        .send_to_address(&addresses[addresses.len() - 1], Amount::from_sat(10000))?
-        .txid()?;
+        .send_to_address(
+            &compat::address_to_032(&addresses[addresses.len() - 1]),
+            bitcoin_032::Amount::from_sat(10000),
+        )?
+        .txid()
+        .map(compat::txid_from_032)?;
     let _block_hashes = env.mine_blocks(1, None)?;
     while client.get_height().unwrap() < 104 {
         sleep(Duration::from_millis(10))
@@ -377,8 +399,12 @@ pub fn test_stop_gap_past_last_revealed() -> anyhow::Result<()> {
     let txid_last_addr = env
         .bitcoind
         .client
-        .send_to_address(&addresses[9], Amount::from_sat(10000))?
-        .txid()?;
+        .send_to_address(
+            &compat::address_to_032(&addresses[9]),
+            bitcoin_032::Amount::from_sat(10000),
+        )?
+        .txid()
+        .map(compat::txid_from_032)?;
     let _block_hashes = env.mine_blocks(1, None)?;
     while client.get_height().unwrap() < 103 {
         sleep(Duration::from_millis(10))

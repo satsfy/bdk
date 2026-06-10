@@ -6,7 +6,7 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 
 /// Create a checkpoint chain with the given length
 fn create_checkpoint_chain(length: u32) -> CheckPoint<BlockHash> {
-    let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+    let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
     for height in 1..=length {
         let hash = BlockHash::from_byte_array([(height % 256) as u8; 32]);
         cp = cp.push(height, hash).unwrap();
@@ -99,7 +99,7 @@ fn bench_checkpoint_range(c: &mut Criterion) {
 fn bench_checkpoint_insert(c: &mut Criterion) {
     c.bench_function("insert_sparse_1000", |b: &mut Bencher| {
         // Create a sparse chain
-        let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+        let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
         for i in 1..=100 {
             let height = i * 10;
             let hash = BlockHash::from_byte_array([(height % 256) as u8; 32]);

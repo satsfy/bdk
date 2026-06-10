@@ -128,15 +128,15 @@ impl ToSql for Impl<bitcoin::Transaction> {
     }
 }
 
-impl FromSql for Impl<bitcoin::ScriptBuf> {
+impl FromSql for Impl<bitcoin::ScriptPubKeyBuf> {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        Ok(bitcoin::Script::from_bytes(value.as_bytes()?)
+        Ok(bitcoin::ScriptPubKey::from_bytes(value.as_bytes()?)
             .to_owned()
             .into())
     }
 }
 
-impl ToSql for Impl<bitcoin::ScriptBuf> {
+impl ToSql for Impl<bitcoin::ScriptPubKeyBuf> {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(self.as_bytes().into())
     }
@@ -144,7 +144,10 @@ impl ToSql for Impl<bitcoin::ScriptBuf> {
 
 impl FromSql for Impl<bitcoin::Amount> {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        Ok(bitcoin::Amount::from_sat(value.as_i64()?.try_into().map_err(from_sql_error)?).into())
+        let sat: u64 = value.as_i64()?.try_into().map_err(from_sql_error)?;
+        bitcoin::Amount::from_sat(sat)
+            .map(Self)
+            .map_err(from_sql_error)
     }
 }
 
@@ -332,7 +335,7 @@ impl tx_graph::ChangeSet<ConfirmationBlockTime> {
                 row.get::<_, Impl<bitcoin::Txid>>("txid")?,
                 row.get::<_, u32>("vout")?,
                 row.get::<_, Impl<bitcoin::Amount>>("value")?,
-                row.get::<_, Impl<bitcoin::ScriptBuf>>("script")?,
+                row.get::<_, Impl<bitcoin::ScriptPubKeyBuf>>("script")?,
             ))
         })?;
         for row in row_iter {
@@ -340,7 +343,7 @@ impl tx_graph::ChangeSet<ConfirmationBlockTime> {
             changeset.txouts.insert(
                 bitcoin::OutPoint { txid, vout },
                 bitcoin::TxOut {
-                    value,
+                    amount: value,
                     script_pubkey,
                 },
             );
@@ -433,7 +436,7 @@ impl tx_graph::ChangeSet<ConfirmationBlockTime> {
             statement.execute(named_params! {
                 ":txid": Impl(op.txid),
                 ":vout": op.vout,
-                ":value": Impl(txo.value),
+                ":value": Impl(txo.amount),
                 ":script": Impl(txo.script_pubkey.clone()),
             })?;
         }
@@ -611,7 +614,7 @@ impl keychain_txout::ChangeSet {
             Ok((
                 row.get::<_, Impl<DescriptorId>>("descriptor_id")?,
                 row.get::<_, u32>("spk_index")?,
-                row.get::<_, Impl<bitcoin::ScriptBuf>>("spk")?,
+                row.get::<_, Impl<bitcoin::ScriptPubKeyBuf>>("spk")?,
             ))
         })?;
         for row in row_iter {
@@ -682,8 +685,8 @@ mod test {
         let tx = bitcoin::Transaction {
             version: transaction::Version::TWO,
             lock_time: absolute::LockTime::ZERO,
-            input: vec![TxIn::default()],
-            output: vec![TxOut::NULL],
+            inputs: vec![TxIn::EMPTY_COINBASE],
+            outputs: vec![bitcoin::TxOut { amount: bitcoin::Amount::ZERO, script_pubkey: Default::default() }],
         };
         let tx = Arc::new(tx);
         let txid = tx.compute_txid();
@@ -744,8 +747,8 @@ mod test {
         let tx = bitcoin::Transaction {
             version: transaction::Version::TWO,
             lock_time: absolute::LockTime::ZERO,
-            input: vec![TxIn::default()],
-            output: vec![TxOut::NULL],
+            inputs: vec![TxIn::EMPTY_COINBASE],
+            outputs: vec![bitcoin::TxOut { amount: bitcoin::Amount::ZERO, script_pubkey: Default::default() }],
         };
         let tx = Arc::new(tx);
         let txid = tx.compute_txid();
@@ -840,7 +843,7 @@ mod test {
             db_tx.commit()?;
         }
 
-        let txid = bitcoin::Txid::all_zeros();
+        let txid = bitcoin::Txid::from_byte_array([0; 32]);
         let first_seen = 100;
 
         // Persist `first_seen`
@@ -879,7 +882,7 @@ mod test {
             db_tx.commit()?;
         }
 
-        let txid = bitcoin::Txid::all_zeros();
+        let txid = bitcoin::Txid::from_byte_array([0; 32]);
         let last_evicted = 100;
 
         // Persist `last_evicted`

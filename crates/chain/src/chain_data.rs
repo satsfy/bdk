@@ -286,7 +286,7 @@ mod test {
                     ..Default::default()
                 },
             },
-            transitively: Some(Txid::all_zeros()),
+            transitively: Some(Txid::from_byte_array([0; 32])),
         };
         let conf_shallow = ChainPosition::Confirmed {
             anchor: ConfirmationBlockTime {

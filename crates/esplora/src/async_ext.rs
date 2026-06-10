@@ -1,3 +1,4 @@
+use crate::compat;
 use async_trait::async_trait;
 use bdk_core::collections::{BTreeMap, BTreeSet, HashSet};
 use bdk_core::spk_client::{
@@ -189,7 +190,7 @@ async fn fetch_latest_blocks<S: Sleeper>(
         .get_block_infos(None)
         .await?
         .into_iter()
-        .map(|b| (b.height, b.id))
+        .map(|b| (b.height, compat::blockhash_from_032(b.id)))
         .collect())
 }
 
@@ -219,7 +220,7 @@ async fn fetch_block<S: Sleeper>(
         }
     }
 
-    Ok(Some(client.get_block_hash(height).await?))
+    Ok(Some(compat::blockhash_from_032(client.get_block_hash(height).await?)))
 }
 
 /// Create the [`local_chain::Update`].
@@ -259,7 +260,7 @@ async fn chain_update<S: Sleeper>(
         Some(tip) => tip,
         None => {
             return Err(Box::new(esplora_client::Error::HeaderHashNotFound(
-                local_cp_hash,
+                compat::blockhash_to_032(local_cp_hash),
             )));
         }
     };
@@ -291,7 +292,7 @@ async fn chain_update<S: Sleeper>(
 /// Fetch transactions and associated [`ConfirmationBlockTime`]s by scanning
 /// `keychain_spks` against Esplora.
 ///
-/// `keychain_spks` is an *unbounded* indexed-[`ScriptBuf`] iterator that represents scripts
+/// `keychain_spks` is an *unbounded* indexed-[`ScriptPubKeyBuf`] iterator that represents scripts
 /// derived from a keychain. The scanning logic stops after a `stop_gap` number of consecutive
 /// scripts with no transaction history is reached. `parallel_requests` specifies the maximum
 /// number of HTTP requests to make in parallel.
@@ -335,7 +336,7 @@ where
                     let mut last_seen = None;
                     let mut spk_txs = Vec::new();
                     loop {
-                        let txs = client.scripthash_txs(&spk, last_seen).await?;
+                        let txs = client.scripthash_txs(compat::spk_to_032(&spk), last_seen).await?;
                         let tx_count = txs.len();
                         last_seen = txs.last().map(|tx| tx.txid);
                         spk_txs.extend(txs);
@@ -343,7 +344,10 @@ where
                             break;
                         }
                     }
-                    let got_txids = spk_txs.iter().map(|tx| tx.txid).collect::<HashSet<_>>();
+                    let got_txids = spk_txs
+                        .iter()
+                        .map(|tx| compat::txid_from_032(tx.txid))
+                        .collect::<HashSet<_>>();
                     let evicted_txids = expected_txids
                         .difference(&got_txids)
                         .copied()
@@ -366,10 +370,11 @@ where
             }
 
             for tx in txs {
-                if inserted_txs.insert(tx.txid) {
-                    update.txs.push(tx.to_tx().into());
+                let txid = compat::txid_from_032(tx.txid);
+                if inserted_txs.insert(txid) {
+                    update.txs.push(compat::tx_from_032(&tx.to_tx()).into());
                 }
-                insert_anchor_or_seen_at_from_status(&mut update, start_time, tx.txid, tx.status);
+                insert_anchor_or_seen_at_from_status(&mut update, start_time, txid, tx.status);
                 insert_prevouts(&mut update, tx.vin);
             }
             update
@@ -449,7 +454,10 @@ where
             .take(parallel_requests)
             .map(|txid| {
                 let client = client.clone();
-                async move { client.get_tx_info(&txid).await.map(|t| (txid, t)) }
+                async move { client
+                    .get_tx_info(&compat::txid_to_032(txid))
+                    .await
+                    .map(|t| (txid, t)) }
             })
             .collect::<FuturesOrdered<_>>();
 
@@ -460,7 +468,7 @@ where
         for (txid, tx_info) in handles.try_collect::<Vec<_>>().await? {
             if let Some(tx_info) = tx_info {
                 if inserted_txs.insert(txid) {
-                    update.txs.push(tx_info.to_tx().into());
+                    update.txs.push(compat::tx_from_032(&tx_info.to_tx()).into());
                 }
                 insert_anchor_or_seen_at_from_status(&mut update, start_time, txid, tx_info.status);
                 insert_prevouts(&mut update, tx_info.vin);
@@ -513,7 +521,7 @@ where
             .take(parallel_requests)
             .map(|op| {
                 let client = client.clone();
-                async move { client.get_output_status(&op.txid, op.vout as _).await }
+                async move { client.get_output_status(&compat::txid_to_032(op.txid), op.vout as _).await }
             })
             .collect::<FuturesOrdered<_>>();
 
@@ -523,7 +531,7 @@ where
 
         for op_status in handles.try_collect::<Vec<_>>().await?.into_iter().flatten() {
             let spend_txid = match op_status.txid {
-                Some(txid) => txid,
+                Some(txid) => compat::txid_from_032(txid),
                 None => continue,
             };
             if !inserted_txs.contains(&spend_txid) {
@@ -571,7 +579,7 @@ mod test {
 
     macro_rules! h {
         ($index:literal) => {{
-            bdk_chain::bitcoin::hashes::Hash::hash($index.as_bytes())
+            bdk_testenv::utils::TestHash::hash_data($index.as_bytes())
         }};
     }
 
@@ -592,8 +600,10 @@ mod test {
         assert!(!latest_blocks.is_empty());
         assert_eq!(latest_blocks.keys().last(), Some(&mine_to));
 
-        let genesis_hash =
-            bitcoin::constants::genesis_block(bitcoin::Network::Testnet4).block_hash();
+        let genesis_hash = bitcoin::constants::genesis_block(bitcoin::Network::Testnet(
+            bitcoin::TestnetVersion::V4,
+        ))
+        .block_hash();
         let cp = bdk_chain::CheckPoint::new(0, genesis_hash);
 
         let anchors = BTreeSet::new();
@@ -602,7 +612,7 @@ mod test {
         assert!(
             matches!(
                 *res.unwrap_err(),
-                Error::HeaderHashNotFound(hash) if hash == genesis_hash
+                Error::HeaderHashNotFound(hash) if hash == crate::compat::blockhash_to_032(genesis_hash)
             ),
             "`chain_update` should error if it can't connect to the local CP",
         );
@@ -680,15 +690,11 @@ mod test {
                             ConfirmationBlockTime {
                                 block_id: BlockId {
                                     height,
-                                    hash: env
-                                        .bitcoind
-                                        .client
-                                        .get_block_hash(height as _)?
-                                        .block_hash()?,
+                                    hash: env.get_block_hash(height as _)?,
                                 },
                                 confirmation_time: height as _,
                             },
-                            Txid::all_zeros(),
+                            Txid::from_byte_array([0; 32]),
                         ))
                     })
                     .collect::<anyhow::Result<BTreeSet<_>>>()?;
@@ -724,11 +730,7 @@ mod test {
                             ConfirmationBlockTime {
                                 block_id: BlockId {
                                     height,
-                                    hash: env
-                                        .bitcoind
-                                        .client
-                                        .get_block_hash(height as _)?
-                                        .block_hash()?,
+                                    hash: env.get_block_hash(height as _)?,
                                 },
                                 confirmation_time: height as _,
                             },

@@ -6,10 +6,11 @@
 //! [0]: https://github.com/bitcoin/bips/blob/master/bip-0157.mediawiki
 //! [1]: https://github.com/bitcoin/bips/blob/master/bip-0158.mediawiki
 
+use crate::compat;
 use bdk_core::bitcoin;
 use bdk_core::CheckPoint;
 use bitcoin::BlockHash;
-use bitcoin::{bip158::BlockFilter, Block, ScriptBuf};
+use bitcoin::{bip158::BlockFilter, block::Checked, Block, ScriptPubKeyBuf};
 use bitcoincore_rpc;
 use bitcoincore_rpc::{json::GetBlockHeaderResult, RpcApi};
 
@@ -33,7 +34,7 @@ pub struct FilterIter<'a> {
     /// RPC client
     client: &'a bitcoincore_rpc::Client,
     /// SPK inventory
-    spks: Vec<ScriptBuf>,
+    spks: Vec<ScriptPubKeyBuf>,
     /// checkpoint
     cp: CheckPoint<BlockHash>,
     /// Header info, contains the prev and next hashes for each header.
@@ -45,7 +46,7 @@ impl<'a> FilterIter<'a> {
     pub fn new(
         client: &'a bitcoincore_rpc::Client,
         cp: CheckPoint,
-        spks: impl IntoIterator<Item = ScriptBuf>,
+        spks: impl IntoIterator<Item = ScriptPubKeyBuf>,
     ) -> Self {
         Self {
             client,
@@ -60,7 +61,10 @@ impl<'a> FilterIter<'a> {
     /// Error if no agreement header is found.
     fn find_base(&self) -> Result<GetBlockHeaderResult, Error> {
         for cp in self.cp.iter() {
-            match self.client.get_block_header_info(&cp.hash()) {
+            match self
+                .client
+                .get_block_header_info(&compat::blockhash_to_032(cp.hash()))
+            {
                 Err(e) if is_not_found(&e) => continue,
                 Ok(header) if header.confirmations <= 0 => continue,
                 Ok(header) => return Ok(header),
@@ -77,7 +81,7 @@ pub struct Event {
     /// Checkpoint
     pub cp: CheckPoint,
     /// Block, will be `Some(..)` for matching blocks
-    pub block: Option<Block>,
+    pub block: Option<Block<Checked>>,
 }
 
 impl Event {
@@ -124,18 +128,19 @@ impl Iterator for FilterIter<'_> {
             }
 
             next_hash = next_header.hash;
+            let next_hash_bdk = compat::blockhash_from_032(next_hash);
             let next_height: u32 = next_header.height.try_into()?;
 
-            cp = cp.insert(next_height, next_hash);
+            cp = cp.insert(next_height, next_hash_bdk);
 
             let mut block = None;
             let filter =
                 BlockFilter::new(self.client.get_block_filter(&next_hash)?.filter.as_slice());
             if filter
-                .match_any(&next_hash, self.spks.iter().map(ScriptBuf::as_ref))
+                .match_any(next_hash_bdk, self.spks.iter().map(ScriptPubKeyBuf::as_ref))
                 .map_err(Error::Bip158)?
             {
-                block = Some(self.client.get_block(&next_hash)?);
+                block = Some(compat::block_from_032(&self.client.get_block(&next_hash)?));
             }
 
             // Store the next header

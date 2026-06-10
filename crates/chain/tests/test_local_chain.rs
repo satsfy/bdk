@@ -10,6 +10,7 @@ use bdk_chain::{
     },
     BlockId,
 };
+use bdk_testenv::utils::TestHash;
 use bdk_testenv::{chain_update, hash, local_chain};
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::{block::Header, hashes::Hash, BlockHash};
@@ -401,9 +402,9 @@ fn local_chain_insert_header() {
         Header {
             version: bitcoin::block::Version::default(),
             prev_blockhash,
-            merkle_root: bitcoin::hash_types::TxMerkleNode::all_zeros(),
-            time: 0,
-            bits: bitcoin::CompactTarget::default(),
+            merkle_root: bitcoin::hash_types::TxMerkleNode::from_byte_array([0; 32]),
+            time: bitcoin::BlockTime::from_u32(0),
+            bits: bitcoin::CompactTarget::from_consensus(0),
             nonce: 0,
         }
     }
@@ -824,9 +825,9 @@ fn local_chain_apply_header_connected_to() {
         Header {
             version: bitcoin::block::Version::default(),
             prev_blockhash,
-            merkle_root: bitcoin::hash_types::TxMerkleNode::all_zeros(),
-            time: 0,
-            bits: bitcoin::CompactTarget::default(),
+            merkle_root: bitcoin::hash_types::TxMerkleNode::from_byte_array([0; 32]),
+            time: bitcoin::BlockTime::from_u32(0),
+            bits: bitcoin::CompactTarget::from_consensus(0),
             nonce: 0,
         }
     }
@@ -875,7 +876,7 @@ fn local_chain_apply_header_connected_to() {
             }
         },
         {
-            let header = header_from_prev_blockhash(BlockHash::all_zeros());
+            let header = header_from_prev_blockhash(BlockHash::from_byte_array([0; 32]));
             let hash = header.block_hash();
             let height = 0;
             let connected_to = BlockId { height, hash };
@@ -992,7 +993,7 @@ fn generate_checkpoints(
     proptest::collection::btree_set(1..max_height, 0..max_count).prop_map(|mut heights| {
         heights.insert(0); // must have genesis
         CheckPoint::from_blocks(heights.into_iter().map(|height| {
-            let hash = bitcoin::hashes::Hash::hash(height.to_le_bytes().as_slice());
+            let hash = BlockHash::hash_data(height.to_le_bytes().as_slice());
             (height, hash)
         }))
         .expect("blocks must be in order as it comes from btreeset")
@@ -1040,7 +1041,7 @@ fn merge_chains_with_prev_blockhash() {
     // Common test blocks
     let block_genesis = TestBlock {
         hash: hash!("_"),
-        prev_hash: BlockHash::all_zeros(),
+        prev_hash: BlockHash::from_byte_array([0; 32]),
     };
     let block_a = TestBlock {
         hash: hash!("A"),

@@ -7,7 +7,9 @@ use crate::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
     Indexer,
 };
-use bitcoin::{Amount, OutPoint, Script, ScriptBuf, SignedAmount, Transaction, TxIn, TxOut, Txid};
+use bitcoin::{
+    Amount, OutPoint, ScriptPubKey, ScriptPubKeyBuf, SignedAmount, Transaction, TxIn, TxOut, Txid,
+};
 
 /// An index storing [`TxOut`]s that have a script pubkey that matches those in a list.
 ///
@@ -32,9 +34,9 @@ use bitcoin::{Amount, OutPoint, Script, ScriptBuf, SignedAmount, Transaction, Tx
 #[derive(Clone, Debug)]
 pub struct SpkTxOutIndex<I> {
     /// script pubkeys ordered by index
-    spks: BTreeMap<I, ScriptBuf>,
+    spks: BTreeMap<I, ScriptPubKeyBuf>,
     /// A reverse lookup from spk to spk index
-    spk_indices: HashMap<ScriptBuf, I>,
+    spk_indices: HashMap<ScriptPubKeyBuf, I>,
     /// The set of unused indexes.
     unused: BTreeSet<I>,
     /// Lookup index and txout by outpoint.
@@ -97,8 +99,8 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     pub fn scan(&mut self, tx: &Transaction) -> BTreeSet<I> {
         let mut scanned_indices = BTreeSet::new();
         let txid = tx.compute_txid();
-        for (i, txout) in tx.output.iter().enumerate() {
-            let op = OutPoint::new(txid, i as u32);
+        for (i, txout) in tx.outputs.iter().enumerate() {
+            let op = OutPoint { txid: txid, vout: i as u32 };
             if let Some(spk_i) = self.scan_txout(op, txout) {
                 scanned_indices.insert(spk_i.clone());
             }
@@ -139,7 +141,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         txid: Txid,
     ) -> impl DoubleEndedIterator<Item = (&I, OutPoint, &TxOut)> {
         self.txouts
-            .range(OutPoint::new(txid, u32::MIN)..=OutPoint::new(txid, u32::MAX))
+            .range(OutPoint { txid: txid, vout: u32::MIN }..=OutPoint { txid: txid, vout: u32::MAX })
             .map(|(op, (index, txout))| (index, *op, txout))
     }
 
@@ -148,14 +150,13 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         &self,
         range: impl RangeBounds<I>,
     ) -> impl DoubleEndedIterator<Item = (&I, OutPoint)> {
-        use bitcoin::hashes::Hash;
         use core::ops::Bound::*;
         let min_op = OutPoint {
-            txid: Txid::all_zeros(),
+            txid: Txid::from_byte_array([0x00; 32]),
             vout: u32::MIN,
         };
         let max_op = OutPoint {
-            txid: Txid::from_byte_array([0xff; Txid::LEN]),
+            txid: Txid::from_byte_array([0xff; 32]),
             vout: u32::MAX,
         };
 
@@ -184,12 +185,12 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// Returns the script that has been inserted at the `index`.
     ///
     /// If that index hasn't been inserted yet, it will return `None`.
-    pub fn spk_at_index(&self, index: &I) -> Option<ScriptBuf> {
+    pub fn spk_at_index(&self, index: &I) -> Option<ScriptPubKeyBuf> {
         self.spks.get(index).cloned()
     }
 
     /// The script pubkeys that are being tracked by the index.
-    pub fn all_spks(&self) -> &BTreeMap<I, ScriptBuf> {
+    pub fn all_spks(&self) -> &BTreeMap<I, ScriptPubKeyBuf> {
         &self.spks
     }
 
@@ -197,7 +198,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// the map
     ///
     /// the index will look for outputs spending to this spk whenever it scans new data.
-    pub fn insert_spk(&mut self, index: I, spk: ScriptBuf) -> bool {
+    pub fn insert_spk(&mut self, index: I, spk: ScriptPubKeyBuf) -> bool {
         match self.spk_indices.entry(spk.clone()) {
             Entry::Vacant(value) => {
                 value.insert(index.clone());
@@ -229,7 +230,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     pub fn unused_spks<R>(
         &self,
         range: R,
-    ) -> impl DoubleEndedIterator<Item = (&I, ScriptBuf)> + Clone + '_
+    ) -> impl DoubleEndedIterator<Item = (&I, ScriptPubKeyBuf)> + Clone + '_
     where
         R: RangeBounds<I>,
     {
@@ -282,7 +283,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// Returns the index associated with the script pubkey.
     pub fn index_of_spk<T>(&self, script: T) -> Option<&I>
     where
-        T: AsRef<Script>,
+        T: AsRef<ScriptPubKey>,
     {
         self.spk_indices.get(script.as_ref())
     }
@@ -300,17 +301,17 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         let mut sent = Amount::ZERO;
         let mut received = Amount::ZERO;
 
-        for txin in &tx.input {
+        for txin in &tx.inputs {
             if let Some((index, txout)) = self.txout(txin.previous_output) {
                 if range.contains(index) {
-                    sent += txout.value;
+                    sent = (sent + txout.amount).expect("sent must not overflow");
                 }
             }
         }
-        for txout in &tx.output {
+        for txout in &tx.outputs {
             if let Some(index) = self.index_of_spk(txout.script_pubkey.as_script()) {
                 if range.contains(index) {
-                    received += txout.value;
+                    received = (received + txout.amount).expect("received must not overflow");
                 }
             }
         }
@@ -336,7 +337,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// let mut index = SpkTxOutIndex::<u32>::default();
     ///
     /// // ... scan transactions to populate the index ...
-    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, input: vec![], output: vec![] };
+    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, inputs: vec![], outputs: vec![] };
     ///
     /// // Get spent txouts for a transaction for all indexed spks
     /// let spent_txouts = index.spent_txouts(&tx);
@@ -345,7 +346,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// println!("Spent:");
     /// for spent in spent_txouts {
     ///     let address = Address::from_script(&spent.txout.script_pubkey, Network::Bitcoin)?;
-    ///     println!("input {}: from {} - {}", spent.outpoint().vout, address, &spent.txout.value.to_sat());
+    ///     println!("input {}: from {} - {}", spent.outpoint().vout, address, &spent.txout.amount.to_sat());
     /// }
     /// # Ok(())
     /// # }
@@ -354,7 +355,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         &'a self,
         tx: &'a Transaction,
     ) -> impl Iterator<Item = SpentTxOut<I>> + 'a {
-        tx.input
+        tx.inputs
             .iter()
             .enumerate()
             .filter_map(|(input_index, txin)| {
@@ -386,7 +387,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// let mut index = SpkTxOutIndex::<u32>::default();
     ///
     /// // ... scan transactions to populate the index ...
-    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, input: vec![], output: vec![] };
+    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, inputs: vec![], outputs: vec![] };
     ///
     /// // Get created txouts for a transaction for all indexed spks
     /// let created_txouts = index.created_txouts(&tx);
@@ -395,7 +396,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// println!("Created:");
     /// for created in created_txouts {
     ///     let address = Address::from_script(&created.txout.script_pubkey, Network::Bitcoin)?;
-    ///     println!("output {}: to {} + {}", &created.outpoint.vout, address, &created.txout.value.display_dynamic());
+    ///     println!("output {}: to {} + {}", &created.outpoint.vout, address, &created.txout.amount.display_dynamic());
     /// }
     /// # Ok(())
     /// # }
@@ -404,7 +405,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         &'a self,
         tx: &'a Transaction,
     ) -> impl Iterator<Item = CreatedTxOut<I>> + 'a {
-        tx.output
+        tx.outputs
             .iter()
             .enumerate()
             .filter_map(|(output_index, txout)| {
@@ -426,8 +427,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// [`sent_and_received`]: Self::sent_and_received
     pub fn net_value(&self, tx: &Transaction, range: impl RangeBounds<I>) -> SignedAmount {
         let (sent, received) = self.sent_and_received(tx, range);
-        received.to_signed().expect("valid `SignedAmount`")
-            - sent.to_signed().expect("valid `SignedAmount`")
+        (received.to_signed() - sent.to_signed()).expect("net value must not overflow")
     }
 
     /// Whether any of the inputs of this transaction spend a txout tracked or whether any output
@@ -439,11 +439,11 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// transactions in the block** and only then use this method.
     pub fn is_relevant(&self, tx: &Transaction) -> bool {
         let input_matches = tx
-            .input
+            .inputs
             .iter()
             .any(|input| self.txouts.contains_key(&input.previous_output));
         let output_matches = tx
-            .output
+            .outputs
             .iter()
             .any(|output| self.spk_indices.contains_key(&output.script_pubkey));
         input_matches || output_matches
@@ -454,15 +454,15 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// Returns a set of script pubkeys from [`SpkTxOutIndex`] that are relevant to the outputs and
     /// previous outputs of a given transaction. Inputs are only considered relevant if the parent
     /// transactions have been scanned.
-    pub fn relevant_spks_of_tx(&self, tx: &Transaction) -> BTreeSet<(I, ScriptBuf)> {
-        let spks_from_inputs = tx.input.iter().filter_map(|txin| {
+    pub fn relevant_spks_of_tx(&self, tx: &Transaction) -> BTreeSet<(I, ScriptPubKeyBuf)> {
+        let spks_from_inputs = tx.inputs.iter().filter_map(|txin| {
             self.txouts
                 .get(&txin.previous_output)
                 .cloned()
                 .map(|(i, prev_txo)| (i, prev_txo.script_pubkey))
         });
         let spks_from_outputs = tx
-            .output
+            .outputs
             .iter()
             .filter_map(|txout| self.spk_indices.get_key_value(&txout.script_pubkey))
             .map(|(spk, i)| (i.clone(), spk.clone()));

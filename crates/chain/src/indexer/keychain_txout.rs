@@ -11,9 +11,11 @@ use crate::{
     DescriptorExt, DescriptorId, Indexed, Indexer, KeychainIndexed, SpkIterator,
 };
 use alloc::{borrow::ToOwned, vec::Vec};
+use crate::compat::{self, ms_bitcoin};
 use bitcoin::{
-    key::Secp256k1, Amount, OutPoint, Script, ScriptBuf, SignedAmount, Transaction, TxOut, Txid,
+    Amount, OutPoint, ScriptPubKey, ScriptPubKeyBuf, SignedAmount, Transaction, TxOut, Txid,
 };
+use ms_bitcoin::secp256k1::Secp256k1;
 use core::{
     fmt::Debug,
     ops::{Bound, RangeBounds},
@@ -97,7 +99,7 @@ pub const DEFAULT_LOOKAHEAD: u32 = 25;
 /// // Construct index with lookahead of 21 and enable spk caching.
 /// let mut txout_index = KeychainTxOutIndex::<MyKeychain>::new(21, true);
 ///
-/// # let secp = bdk_chain::bitcoin::secp256k1::Secp256k1::signing_only();
+/// # let secp = bdk_chain::compat::ms_bitcoin::secp256k1::Secp256k1::signing_only();
 /// # let (external_descriptor,_) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "tr([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/0/*)").unwrap();
 /// # let (internal_descriptor,_) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "tr([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/1/*)").unwrap();
 /// # let (descriptor_42, _) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "tr([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/2/*)").unwrap();
@@ -138,9 +140,9 @@ pub struct KeychainTxOutIndex<K> {
     /// If `false`, `spk_cache` and `spk_cache_stage` will remain empty.
     persist_spks: bool,
     /// Cache of derived spks.
-    spk_cache: BTreeMap<DescriptorId, HashMap<u32, ScriptBuf>>,
+    spk_cache: BTreeMap<DescriptorId, HashMap<u32, ScriptPubKeyBuf>>,
     /// Staged script pubkeys waiting to be written out in the next ChangeSet.
-    spk_cache_stage: BTreeMap<DescriptorId, Vec<(u32, ScriptBuf)>>,
+    spk_cache_stage: BTreeMap<DescriptorId, Vec<(u32, ScriptPubKeyBuf)>>,
 }
 
 impl<K> Default for KeychainTxOutIndex<K> {
@@ -168,8 +170,8 @@ impl<K: Clone + Ord + Debug> Indexer for KeychainTxOutIndex<K> {
     fn index_tx(&mut self, tx: &bitcoin::Transaction) -> Self::ChangeSet {
         let mut changeset = ChangeSet::default();
         let txid = tx.compute_txid();
-        for (vout, txout) in tx.output.iter().enumerate() {
-            self._index_txout(&mut changeset, OutPoint::new(txid, vout as u32), txout);
+        for (vout, txout) in tx.outputs.iter().enumerate() {
+            self._index_txout(&mut changeset, OutPoint { txid: txid, vout: vout as u32 }, txout);
         }
         self._empty_stage_into_changeset(&mut changeset);
         changeset
@@ -295,10 +297,11 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
                 {
                     let desc = self.descriptors.get(&did).expect("invariant");
                     spks.iter().all(|(i, spk)| {
-                        let exp_spk = desc
-                            .at_derivation_index(*i)
-                            .expect("must derive")
-                            .script_pubkey();
+                        let exp_spk = compat::spk_from_ms(
+                            desc.at_derivation_index(*i)
+                                .expect("must derive")
+                                .script_pubkey(),
+                        );
                         &exp_spk == spk
                     })
                 },
@@ -348,7 +351,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     /// Return the script that exists under the given `keychain`'s `index`.
     ///
     /// This calls [`SpkTxOutIndex::spk_at_index`] internally.
-    pub fn spk_at_index(&self, keychain: K, index: u32) -> Option<ScriptBuf> {
+    pub fn spk_at_index(&self, keychain: K, index: u32) -> Option<ScriptPubKeyBuf> {
         self.inner.spk_at_index(&(keychain.clone(), index))
     }
 
@@ -357,7 +360,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     /// This calls [`SpkTxOutIndex::index_of_spk`] internally.
     pub fn index_of_spk<T>(&self, script: T) -> Option<&(K, u32)>
     where
-        T: AsRef<Script>,
+        T: AsRef<ScriptPubKey>,
     {
         self.inner.index_of_spk(script)
     }
@@ -587,18 +590,20 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
             let derive_spk = {
                 let secp = Secp256k1::verification_only();
                 let _desc = &descriptor;
-                move |spk_i: u32| -> ScriptBuf {
-                    _desc
-                        .derived_descriptor(&secp, spk_i)
-                        .expect("The descriptor cannot have hardened derivation")
-                        .script_pubkey()
+                move |spk_i: u32| -> ScriptPubKeyBuf {
+                    compat::spk_from_ms(
+                        _desc
+                            .derived_descriptor(&secp, spk_i)
+                            .expect("The descriptor cannot have hardened derivation")
+                            .script_pubkey(),
+                    )
                 }
             };
             let cached_spk_iter = core::iter::from_fn({
                 let spk_cache = self.spk_cache.entry(did).or_default();
                 let spk_stage = self.spk_cache_stage.entry(did).or_default();
                 let _i = &mut next_index;
-                move || -> Option<Indexed<ScriptBuf>> {
+                move || -> Option<Indexed<ScriptPubKeyBuf>> {
                     if *_i >= stop_index {
                         return None;
                     }
@@ -661,7 +666,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     pub fn revealed_spks(
         &self,
         range: impl RangeBounds<K>,
-    ) -> impl Iterator<Item = KeychainIndexed<K, ScriptBuf>> + '_ {
+    ) -> impl Iterator<Item = KeychainIndexed<K, ScriptPubKeyBuf>> + '_ {
         let start = range.start_bound();
         let end = range.end_bound();
         let mut iter_last_revealed = self
@@ -700,7 +705,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     pub fn revealed_keychain_spks(
         &self,
         keychain: K,
-    ) -> impl DoubleEndedIterator<Item = Indexed<ScriptBuf>> + '_ {
+    ) -> impl DoubleEndedIterator<Item = Indexed<ScriptPubKeyBuf>> + '_ {
         let end = self
             .last_revealed_index(keychain.clone())
             .map(|v| v + 1)
@@ -714,7 +719,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     /// Iterate over revealed, but unused, spks of all keychains.
     pub fn unused_spks(
         &self,
-    ) -> impl DoubleEndedIterator<Item = KeychainIndexed<K, ScriptBuf>> + Clone + '_ {
+    ) -> impl DoubleEndedIterator<Item = KeychainIndexed<K, ScriptPubKeyBuf>> + Clone + '_ {
         self.keychain_to_descriptor_id.keys().flat_map(|keychain| {
             self.unused_keychain_spks(keychain.clone())
                 .map(|(i, spk)| ((keychain.clone(), i), spk.clone()))
@@ -726,7 +731,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     pub fn unused_keychain_spks(
         &self,
         keychain: K,
-    ) -> impl DoubleEndedIterator<Item = Indexed<ScriptBuf>> + Clone + '_ {
+    ) -> impl DoubleEndedIterator<Item = Indexed<ScriptPubKeyBuf>> + Clone + '_ {
         let end = match self.keychain_to_descriptor_id.get(&keychain) {
             Some(did) => self.last_revealed.get(did).map(|v| *v + 1).unwrap_or(0),
             None => 0,
@@ -821,7 +826,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
         &mut self,
         keychain: K,
         target_index: u32,
-    ) -> Option<(Vec<Indexed<ScriptBuf>>, ChangeSet)> {
+    ) -> Option<(Vec<Indexed<ScriptPubKeyBuf>>, ChangeSet)> {
         let mut changeset = ChangeSet::default();
         let revealed_spks = self._reveal_to_target(&mut changeset, keychain, target_index)?;
         self._empty_stage_into_changeset(&mut changeset);
@@ -832,8 +837,8 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
         changeset: &mut ChangeSet,
         keychain: K,
         target_index: u32,
-    ) -> Option<Vec<Indexed<ScriptBuf>>> {
-        let mut spks: Vec<Indexed<ScriptBuf>> = vec![];
+    ) -> Option<Vec<Indexed<ScriptPubKeyBuf>>> {
+        let mut spks: Vec<Indexed<ScriptPubKeyBuf>> = vec![];
         loop {
             let (i, new) = self.next_index(keychain.clone())?;
             if !new || i > target_index {
@@ -859,7 +864,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     ///  1. The descriptor has no wildcard and already has one script revealed.
     ///  2. The descriptor has already revealed scripts up to the numeric bound.
     ///  3. There is no descriptor associated with the given keychain.
-    pub fn reveal_next_spk(&mut self, keychain: K) -> Option<(Indexed<ScriptBuf>, ChangeSet)> {
+    pub fn reveal_next_spk(&mut self, keychain: K) -> Option<(Indexed<ScriptPubKeyBuf>, ChangeSet)> {
         let mut changeset = ChangeSet::default();
         let indexed_spk = self._reveal_next_spk(&mut changeset, keychain)?;
         self._empty_stage_into_changeset(&mut changeset);
@@ -869,7 +874,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
         &mut self,
         changeset: &mut ChangeSet,
         keychain: K,
-    ) -> Option<Indexed<ScriptBuf>> {
+    ) -> Option<Indexed<ScriptPubKeyBuf>> {
         let (next_index, new) = self.next_index(keychain.clone())?;
         if new {
             let did = self.keychain_to_descriptor_id.get(&keychain)?;
@@ -897,7 +902,7 @@ impl<K: Clone + Ord + Debug> KeychainTxOutIndex<K> {
     /// could be revealed (see [`reveal_next_spk`] for when this happens).
     ///
     /// [`reveal_next_spk`]: Self::reveal_next_spk
-    pub fn next_unused_spk(&mut self, keychain: K) -> Option<(Indexed<ScriptBuf>, ChangeSet)> {
+    pub fn next_unused_spk(&mut self, keychain: K) -> Option<(Indexed<ScriptPubKeyBuf>, ChangeSet)> {
         let mut changeset = ChangeSet::default();
         let next_unused = self
             .unused_keychain_spks(keychain.clone())
@@ -1054,7 +1059,7 @@ pub struct ChangeSet {
     /// Cache of derived script pubkeys to persist, keyed by descriptor ID and derivation index
     /// (`u32`).
     #[cfg_attr(feature = "serde", serde(default))]
-    pub spk_cache: BTreeMap<DescriptorId, BTreeMap<u32, ScriptBuf>>,
+    pub spk_cache: BTreeMap<DescriptorId, BTreeMap<u32, ScriptPubKeyBuf>>,
 }
 
 impl Merge for ChangeSet {
@@ -1096,13 +1101,13 @@ impl Merge for ChangeSet {
 
 /// Trait to extend [`SyncRequestBuilder`].
 pub trait SyncRequestBuilderExt<K> {
-    /// Add [`Script`]s that are revealed by the `indexer` of the given `spk_range`
+    /// Add [`ScriptPubKey`]s that are revealed by the `indexer` of the given `spk_range`
     /// that will be synced against.
     fn revealed_spks_from_indexer<R>(self, indexer: &KeychainTxOutIndex<K>, spk_range: R) -> Self
     where
         R: core::ops::RangeBounds<K>;
 
-    /// Add [`Script`]s that are revealed by the `indexer` but currently unused.
+    /// Add [`ScriptPubKey`]s that are revealed by the `indexer` but currently unused.
     fn unused_spks_from_indexer(self, indexer: &KeychainTxOutIndex<K>) -> Self;
 }
 
@@ -1143,7 +1148,6 @@ mod test {
     use super::*;
 
     use bdk_testenv::utils::DESCRIPTORS;
-    use bitcoin::secp256k1::Secp256k1;
     use miniscript::Descriptor;
 
     // Test that `KeychainTxOutIndex` uses the spk cache.
@@ -1181,7 +1185,7 @@ mod test {
             assert_eq!(did, desc.descriptor_id());
             for (&i, cached_spk) in cached_spks {
                 // Cached spk matches derived
-                let exp_spk = desc.at_derivation_index(i).unwrap().script_pubkey();
+                let exp_spk = crate::compat::spk_from_ms(desc.at_derivation_index(i).unwrap().script_pubkey());
                 assert_eq!(&exp_spk, cached_spk);
                 // Also matches the inner index
                 assert_eq!(index.spk_at_index(0, i), Some(cached_spk.clone()));

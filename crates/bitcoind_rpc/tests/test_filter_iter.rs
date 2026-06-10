@@ -1,7 +1,11 @@
 use bdk_bitcoind_rpc::bip158::{Error, FilterIter};
 use bdk_core::CheckPoint;
 use bdk_testenv::{anyhow, bitcoind, TestEnv};
-use bitcoin::{Address, Amount, Network, ScriptBuf};
+use bdk_core::bitcoin::{
+    script::ScriptBufExt as _, Address, Amount, BlockHash, Network, ScriptPubKeyBuf,
+};
+use bdk_testenv::compat;
+use bdk_testenv::utils::TestHash as _;
 use bitcoincore_rpc::RpcApi;
 
 use crate::common::ClientExt;
@@ -21,9 +25,11 @@ fn testenv() -> anyhow::Result<TestEnv> {
 #[test]
 fn filter_iter_matches_blocks() -> anyhow::Result<()> {
     let env = testenv()?;
-    let addr = ClientExt::get_rpc_client(&env)?
-        .get_new_address(None, None)?
-        .assume_checked();
+    let addr = compat::address_from_032(
+        &ClientExt::get_rpc_client(&env)?
+            .get_new_address(None, None)?
+            .assume_checked(),
+    );
 
     let _ = env.mine_blocks(100, Some(addr.clone()))?;
     assert_eq!(ClientExt::get_rpc_client(&env)?.get_block_count()?, 101);
@@ -31,7 +37,7 @@ fn filter_iter_matches_blocks() -> anyhow::Result<()> {
     // Send tx to external address to confirm at height = 102
     let _txid = env.send(
         &Address::from_script(
-            &ScriptBuf::from_hex("0014446906a6560d8ad760db3156706e72e171f3a2aa")?,
+            &ScriptPubKeyBuf::from_hex("0014446906a6560d8ad760db3156706e72e171f3a2aa")?,
             Network::Regtest,
         )?,
         Amount::from_btc(0.42)?,
@@ -63,9 +69,9 @@ fn filter_iter_error_wrong_network() -> anyhow::Result<()> {
     let _ = env.mine_blocks(10, None)?;
 
     // Try to initialize FilterIter with a CP on the wrong network
-    let cp = CheckPoint::new(0, bitcoin::hashes::Hash::hash(b"wrong-hash"));
+    let cp = CheckPoint::new(0, BlockHash::hash_data(b"wrong-hash"));
     let client = ClientExt::get_rpc_client(&env)?;
-    let mut iter = FilterIter::new(&client, cp, [ScriptBuf::new()]);
+    let mut iter = FilterIter::new(&client, cp, [ScriptPubKeyBuf::new()]);
     assert!(matches!(iter.next(), Some(Err(Error::ReorgDepthExceeded))));
 
     Ok(())
@@ -85,7 +91,7 @@ fn filter_iter_detects_reorgs() -> anyhow::Result<()> {
     let genesis_hash = env.genesis_hash()?;
     let cp = CheckPoint::new(0, genesis_hash);
 
-    let spk = ScriptBuf::from_hex("0014446906a6560d8ad760db3156706e72e171f3a2aa")?;
+    let spk = ScriptPubKeyBuf::from_hex("0014446906a6560d8ad760db3156706e72e171f3a2aa")?;
     let client = ClientExt::get_rpc_client(&env)?;
     let mut iter = FilterIter::new(&client, cp, [spk]);
 
@@ -123,7 +129,6 @@ fn filter_iter_detects_reorgs() -> anyhow::Result<()> {
 
 #[test]
 fn event_checkpoint_connects_to_local_chain() -> anyhow::Result<()> {
-    use bitcoin::BlockHash;
     use std::collections::BTreeMap;
     let env = testenv()?;
     let _ = env.mine_blocks(15, None)?;
@@ -138,7 +143,7 @@ fn event_checkpoint_connects_to_local_chain() -> anyhow::Result<()> {
 
     // Construct iter
     let client = ClientExt::get_rpc_client(&env)?;
-    let mut iter = FilterIter::new(&client, cp, vec![ScriptBuf::new()]);
+    let mut iter = FilterIter::new(&client, cp, vec![ScriptPubKeyBuf::new()]);
 
     // Now reorg 3 blocks (14, 15, 16)
     let new_hashes: BTreeMap<u32, BlockHash> = (14..=16).zip(env.reorg(3)?).collect();

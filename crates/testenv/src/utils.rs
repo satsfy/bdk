@@ -1,12 +1,38 @@
 use bdk_chain::bitcoin;
 
+/// Hash types that wrap a 32-byte array, constructible from arbitrary data for tests.
+///
+/// Replaces the `bitcoin::hashes::Hash::hash` constructor which no longer applies to
+/// `bitcoin-primitives` hash types.
+pub trait TestHash {
+    fn hash_data(data: &[u8]) -> Self;
+}
+
+impl TestHash for bitcoin::Txid {
+    fn hash_data(data: &[u8]) -> Self {
+        Self::from_byte_array(bitcoin::hashes::sha256d::Hash::hash(data).to_byte_array())
+    }
+}
+
+impl TestHash for bitcoin::BlockHash {
+    fn hash_data(data: &[u8]) -> Self {
+        Self::from_byte_array(bitcoin::hashes::sha256d::Hash::hash(data).to_byte_array())
+    }
+}
+
+impl TestHash for bitcoin::TxMerkleNode {
+    fn hash_data(data: &[u8]) -> Self {
+        Self::from_byte_array(bitcoin::hashes::sha256d::Hash::hash(data).to_byte_array())
+    }
+}
+
 #[allow(unused_macros)]
 #[macro_export]
 macro_rules! block_id {
     ($height:expr, $hash:literal) => {{
         bdk_chain::BlockId {
             height: $height,
-            hash: bitcoin::hashes::Hash::hash($hash.as_bytes()),
+            hash: $crate::utils::TestHash::hash_data($hash.as_bytes()),
         }
     }};
 }
@@ -15,7 +41,7 @@ macro_rules! block_id {
 #[macro_export]
 macro_rules! hash {
     ($index:literal) => {{
-        bitcoin::hashes::Hash::hash($index.as_bytes())
+        $crate::utils::TestHash::hash_data($index.as_bytes())
     }};
 }
 
@@ -70,10 +96,10 @@ macro_rules! changeset {
 #[allow(unused)]
 pub fn new_tx(lt: u32) -> bitcoin::Transaction {
     bitcoin::Transaction {
-        version: bitcoin::transaction::Version::non_standard(0x00),
+        version: bitcoin::transaction::Version::maybe_non_standard(0x00),
         lock_time: bitcoin::absolute::LockTime::from_consensus(lt),
-        input: vec![],
-        output: vec![],
+        inputs: vec![],
+        outputs: vec![],
     }
 }
 

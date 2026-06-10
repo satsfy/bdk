@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use bdk_chain::{local_chain::LocalChain, CanonicalizationParams, ConfirmationBlockTime, TxGraph};
 use bdk_testenv::{hash, utils::new_tx};
-use bitcoin::{Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxIn, TxOut};
+use bitcoin::{Amount, BlockHash, OutPoint, ScriptPubKeyBuf, Transaction, TxIn, TxOut};
 
 #[test]
 fn test_min_confirmations_parameter() {
@@ -30,18 +30,18 @@ fn test_min_confirmations_parameter() {
 
     // Create a non-coinbase transaction
     let tx = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("parent"), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("parent"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(50_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(50_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
         ..new_tx(1)
     };
     let txid = tx.compute_txid();
-    let outpoint = OutPoint::new(txid, 0);
+    let outpoint = OutPoint { txid: txid, vout: 0 };
 
     // Insert transaction into graph
     let _ = tx_graph.insert_tx(tx.clone());
@@ -64,7 +64,7 @@ fn test_min_confirmations_parameter() {
         1,
     );
 
-    assert_eq!(balance_1_conf.confirmed, Amount::from_sat(50_000));
+    assert_eq!(balance_1_conf.confirmed, Amount::from_sat_u32(50_000));
     assert_eq!(balance_1_conf.trusted_pending, Amount::ZERO);
 
     // Test min_confirmations = 6: Should be confirmed (has exactly 6 confirmations)
@@ -73,7 +73,7 @@ fn test_min_confirmations_parameter() {
         |_, _| true, // trust all
         6,
     );
-    assert_eq!(balance_6_conf.confirmed, Amount::from_sat(50_000));
+    assert_eq!(balance_6_conf.confirmed, Amount::from_sat_u32(50_000));
     assert_eq!(balance_6_conf.trusted_pending, Amount::ZERO);
 
     // Test min_confirmations = 7: Should be trusted pending (only has 6 confirmations)
@@ -83,7 +83,7 @@ fn test_min_confirmations_parameter() {
         7,
     );
     assert_eq!(balance_7_conf.confirmed, Amount::ZERO);
-    assert_eq!(balance_7_conf.trusted_pending, Amount::from_sat(50_000));
+    assert_eq!(balance_7_conf.trusted_pending, Amount::from_sat_u32(50_000));
 
     // Test min_confirmations = 0: Should behave same as 1 (confirmed)
     let balance_0_conf = canonical_view.balance(
@@ -91,7 +91,7 @@ fn test_min_confirmations_parameter() {
         |_, _| true, // trust all
         0,
     );
-    assert_eq!(balance_0_conf.confirmed, Amount::from_sat(50_000));
+    assert_eq!(balance_0_conf.confirmed, Amount::from_sat_u32(50_000));
     assert_eq!(balance_0_conf.trusted_pending, Amount::ZERO);
     assert_eq!(balance_0_conf, balance_1_conf);
 }
@@ -120,18 +120,18 @@ fn test_min_confirmations_with_untrusted_tx() {
 
     // Create a transaction
     let tx = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("parent"), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("parent"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(25_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(25_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
         ..new_tx(1)
     };
     let txid = tx.compute_txid();
-    let outpoint = OutPoint::new(txid, 0);
+    let outpoint = OutPoint { txid: txid, vout: 0 };
 
     let _ = tx_graph.insert_tx(tx.clone());
 
@@ -158,7 +158,7 @@ fn test_min_confirmations_with_untrusted_tx() {
     // Should be untrusted pending (not enough confirmations and not trusted)
     assert_eq!(balance.confirmed, Amount::ZERO);
     assert_eq!(balance.trusted_pending, Amount::ZERO);
-    assert_eq!(balance.untrusted_pending, Amount::from_sat(25_000));
+    assert_eq!(balance.untrusted_pending, Amount::from_sat_u32(25_000));
 }
 
 #[test]
@@ -193,18 +193,18 @@ fn test_min_confirmations_multiple_transactions() {
 
     // Transaction 0: anchored at height 5, has 11 confirmations (tip-5+1 = 15-5+1 = 11)
     let tx0 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("parent0"), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("parent0"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(10_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(10_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
         ..new_tx(1)
     };
     let txid0 = tx0.compute_txid();
-    let outpoint0 = OutPoint::new(txid0, 0);
+    let outpoint0 = OutPoint { txid: txid0, vout: 0 };
     let _ = tx_graph.insert_tx(tx0);
     let _ = tx_graph.insert_anchor(
         txid0,
@@ -217,18 +217,18 @@ fn test_min_confirmations_multiple_transactions() {
 
     // Transaction 1: anchored at height 10, has 6 confirmations (15-10+1 = 6)
     let tx1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("parent1"), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("parent1"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(20_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(20_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
         ..new_tx(2)
     };
     let txid1 = tx1.compute_txid();
-    let outpoint1 = OutPoint::new(txid1, 0);
+    let outpoint1 = OutPoint { txid: txid1, vout: 0 };
     let _ = tx_graph.insert_tx(tx1);
     let _ = tx_graph.insert_anchor(
         txid1,
@@ -241,18 +241,18 @@ fn test_min_confirmations_multiple_transactions() {
 
     // Transaction 2: anchored at height 13, has 3 confirmations (15-13+1 = 3)
     let tx2 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("parent2"), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("parent2"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(30_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(30_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
         ..new_tx(3)
     };
     let txid2 = tx2.compute_txid();
-    let outpoint2 = OutPoint::new(txid2, 0);
+    let outpoint2 = OutPoint { txid: txid2, vout: 0 };
     let _ = tx_graph.insert_tx(tx2);
     let _ = tx_graph.insert_anchor(
         txid2,
@@ -277,11 +277,11 @@ fn test_min_confirmations_multiple_transactions() {
 
     assert_eq!(
         balance.confirmed,
-        Amount::from_sat(10_000 + 20_000) // tx0 + tx1
+        Amount::from_sat_u32(10_000 + 20_000) // tx0 + tx1
     );
     assert_eq!(
         balance.trusted_pending,
-        Amount::from_sat(30_000) // tx2
+        Amount::from_sat_u32(30_000) // tx2
     );
     assert_eq!(balance.untrusted_pending, Amount::ZERO);
 
@@ -293,11 +293,11 @@ fn test_min_confirmations_multiple_transactions() {
 
     assert_eq!(
         balance_high.confirmed,
-        Amount::from_sat(10_000) // only tx0
+        Amount::from_sat_u32(10_000) // only tx0
     );
     assert_eq!(
         balance_high.trusted_pending,
-        Amount::from_sat(20_000 + 30_000) // tx1 + tx2
+        Amount::from_sat_u32(20_000 + 30_000) // tx1 + tx2
     );
     assert_eq!(balance_high.untrusted_pending, Amount::ZERO);
 }

@@ -2,7 +2,11 @@ use std::{collections::BTreeSet, ops::Deref};
 
 use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
 use bdk_chain::{
-    bitcoin::{Address, Amount, Txid},
+    bitcoin::{
+        block::Checked,
+        script::{ScriptPubKeyBufExt as _, WScriptHash},
+        Address, Amount, Block, Network, ScriptPubKeyBuf, Txid,
+    },
     local_chain::{CheckPoint, LocalChain},
     spk_txout::SpkTxOutIndex,
     Balance, BlockId, CanonicalizationParams, IndexedTxGraph, Merge,
@@ -10,9 +14,9 @@ use bdk_chain::{
 use bdk_testenv::{
     anyhow,
     bitcoind::{Input, Output},
+    compat::{self, bitcoin_032},
     TestEnv,
 };
-use bitcoin::{hashes::Hash, Block, Network, ScriptBuf, WScriptHash};
 
 use crate::common::ClientExt;
 
@@ -141,23 +145,26 @@ pub fn test_sync_local_chain() -> anyhow::Result<()> {
 fn test_into_tx_graph() -> anyhow::Result<()> {
     let env = TestEnv::new()?;
 
-    let addr_0 = env
-        .rpc_client()
-        .get_new_address(None, None)?
-        .address()?
-        .assume_checked();
+    let addr_0 = compat::address_from_032(
+        &env.rpc_client()
+            .get_new_address(None, None)?
+            .address()?
+            .assume_checked(),
+    );
 
-    let addr_1 = env
-        .rpc_client()
-        .get_new_address(None, None)?
-        .address()?
-        .assume_checked();
+    let addr_1 = compat::address_from_032(
+        &env.rpc_client()
+            .get_new_address(None, None)?
+            .address()?
+            .assume_checked(),
+    );
 
-    let addr_2 = env
-        .rpc_client()
-        .get_new_address(None, None)?
-        .address()?
-        .assume_checked();
+    let addr_2 = compat::address_from_032(
+        &env.rpc_client()
+            .get_new_address(None, None)?
+            .address()?
+            .assume_checked(),
+    );
 
     env.mine_blocks(101, None)?;
 
@@ -186,8 +193,12 @@ fn test_into_tx_graph() -> anyhow::Result<()> {
         for _ in 0..3 {
             txids.insert(
                 env.rpc_client()
-                    .send_to_address(&addr_0, Amount::from_sat(10_000))?
-                    .txid()?,
+                    .send_to_address(
+                        &compat::address_to_032(&addr_0),
+                        bitcoin_032::Amount::from_sat(10_000),
+                    )?
+                    .txid()
+                    .map(compat::txid_from_032)?,
             );
         }
         txids
@@ -217,7 +228,7 @@ fn test_into_tx_graph() -> anyhow::Result<()> {
     let exp_block_hash = env.mine_blocks(1, None)?[0];
     let exp_block_height = env
         .rpc_client()
-        .get_block_verbose_one(exp_block_hash)?
+        .get_block_verbose_one(compat::blockhash_to_032(exp_block_hash))?
         .height as u32;
     let exp_anchors = exp_txids
         .iter()
@@ -290,10 +301,10 @@ fn ensure_block_emitted_after_reorg_is_at_reorg_height() -> anyhow::Result<()> {
 fn process_block(
     recv_chain: &mut LocalChain,
     recv_graph: &mut IndexedTxGraph<BlockId, SpkTxOutIndex<()>>,
-    block: Block,
+    block: Block<Checked>,
     block_height: u32,
 ) -> anyhow::Result<()> {
-    recv_chain.apply_header(&block.header, block_height)?;
+    recv_chain.apply_header(block.header(), block_height)?;
     let _ = recv_graph.apply_block(block, block_height);
     Ok(())
 }
@@ -332,7 +343,7 @@ fn get_balance(
 fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
     const PREMINE_COUNT: usize = 101;
     const ADDITIONAL_COUNT: usize = 11;
-    const SEND_AMOUNT: Amount = Amount::from_sat(10_000);
+    const SEND_AMOUNT: Amount = Amount::from_sat_u32(10_000);
 
     let env = TestEnv::new()?;
 
@@ -345,12 +356,13 @@ fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
     );
 
     // setup addresses
-    let addr_to_mine = env
-        .rpc_client()
-        .get_new_address(None, None)?
-        .address()?
-        .assume_checked();
-    let spk_to_track = ScriptBuf::new_p2wsh(&WScriptHash::all_zeros());
+    let addr_to_mine = compat::address_from_032(
+        &env.rpc_client()
+            .get_new_address(None, None)?
+            .address()?
+            .assume_checked(),
+    );
+    let spk_to_track = ScriptPubKeyBuf::new_p2wsh(WScriptHash::from_byte_array([0; 32]));
     let addr_to_track = Address::from_script(&spk_to_track, Network::Regtest)?;
 
     // setup receiver
@@ -371,14 +383,14 @@ fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
         // lock outputs that send to `addr_to_track`
         let outpoints_to_lock = env
             .rpc_client()
-            .get_transaction(txid)?
+            .get_transaction(compat::txid_to_032(txid))?
             .into_model()?
             .tx
             .output
             .into_iter()
             .enumerate()
-            .filter(|(_, txo)| txo.script_pubkey == spk_to_track)
-            .map(|(vout, _)| (txid, vout as u32))
+            .filter(|(_, txo)| txo.script_pubkey.as_bytes() == spk_to_track.as_bytes())
+            .map(|(vout, _)| (compat::txid_to_032(txid), vout as u32))
             .collect::<Vec<_>>();
 
         env.rpc_client().lock_unspent(&outpoints_to_lock)?;
@@ -392,7 +404,7 @@ fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
     assert_eq!(
         get_balance(&recv_chain, &recv_graph)?,
         Balance {
-            confirmed: SEND_AMOUNT * ADDITIONAL_COUNT as u64,
+            confirmed: (SEND_AMOUNT * ADDITIONAL_COUNT as u64).expect("valid amount"),
             ..Balance::default()
         },
         "initial balance must be correct",
@@ -406,8 +418,9 @@ fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
         assert_eq!(
             get_balance(&recv_chain, &recv_graph)?,
             Balance {
-                trusted_pending: SEND_AMOUNT * reorg_count as u64,
-                confirmed: SEND_AMOUNT * (ADDITIONAL_COUNT - reorg_count) as u64,
+                trusted_pending: (SEND_AMOUNT * reorg_count as u64).expect("valid amount"),
+                confirmed: (SEND_AMOUNT * (ADDITIONAL_COUNT - reorg_count) as u64)
+                    .expect("valid amount"),
                 ..Balance::default()
             },
             "reorg_count: {reorg_count}",
@@ -438,17 +451,18 @@ fn mempool_avoids_re_emission() -> anyhow::Result<()> {
     );
 
     // mine blocks and sync up emitter
-    let addr = env
-        .rpc_client()
-        .get_new_address(None, None)?
-        .address()?
-        .assume_checked();
+    let addr = compat::address_from_032(
+        &env.rpc_client()
+            .get_new_address(None, None)?
+            .address()?
+            .assume_checked(),
+    );
     env.mine_blocks(BLOCKS_TO_MINE, Some(addr.clone()))?;
     while emitter.next_block()?.is_some() {}
 
     // have some random txs in mempool
     let exp_txids = (0..MEMPOOL_TX_COUNT)
-        .map(|_| env.send(&addr, Amount::from_sat(2100)))
+        .map(|_| env.send(&addr, Amount::from_sat_u32(2100)))
         .collect::<Result<BTreeSet<Txid>, _>>()?;
 
     // First two emissions should include all transactions.
@@ -525,8 +539,10 @@ fn no_agreement_point() -> anyhow::Result<()> {
 
     // invalidate blocks 99a, 100a, 101a
     env.rpc_client().invalidate_block(blockhash_101a)?;
-    env.rpc_client().invalidate_block(block_100a.block_hash())?;
-    env.rpc_client().invalidate_block(block_99a.block_hash())?;
+    env.rpc_client()
+        .invalidate_block(compat::blockhash_to_032(block_100a.block_hash()))?;
+    env.rpc_client()
+        .invalidate_block(compat::blockhash_to_032(block_99a.block_hash()))?;
 
     // mine new blocks 99b, 100b, 101b
     env.mine_blocks(3, None)?;
@@ -538,11 +554,11 @@ fn no_agreement_point() -> anyhow::Result<()> {
     assert_ne!(block_99a.block_hash(), block_99b.block_hash());
     assert_eq!(
         block_98a.block_hash(),
-        block_99a.block.header.prev_blockhash
+        block_99a.block.header().prev_blockhash
     );
     assert_eq!(
         block_98a.block_hash(),
-        block_99b.block.header.prev_blockhash
+        block_99b.block.header().prev_blockhash
     );
 
     Ok(())
@@ -569,9 +585,13 @@ fn test_expect_tx_evicted() -> anyhow::Result<()> {
     let desc = miniscript::Descriptor::parse_descriptor(&Secp256k1::new(), s)
         .unwrap()
         .0;
-    let spk = desc.at_derivation_index(0)?.script_pubkey();
+    let spk_032 = desc.at_derivation_index(0)?.script_pubkey();
+    let spk = bdk_chain::compat::spk_from_ms(spk_032.clone());
 
-    let mut chain = LocalChain::from_genesis(genesis_block(Network::Regtest).block_hash()).0;
+    let mut chain = LocalChain::from_genesis(compat::blockhash_from_032(
+        genesis_block(Network::Regtest).block_hash(),
+    ))
+    .0;
     let chain_tip = chain.tip().block_id();
 
     let mut index = SpkTxOutIndex::default();
@@ -581,16 +601,24 @@ fn test_expect_tx_evicted() -> anyhow::Result<()> {
     // Receive tx1.
     let _ = env.mine_blocks(100, None)?;
     let txid_1 = env.send(
-        &Address::from_script(&spk, Network::Regtest)?,
-        Amount::ONE_BTC,
+        &compat::address_from_032(&bitcoin_032::Address::from_script(
+            &spk_032,
+            bitcoin_032::Network::Regtest,
+        )?),
+        bdk_chain::bitcoin::Amount::ONE_BTC,
     )?;
-    let tx_1 = env.rpc_client().get_transaction(txid_1)?.into_model()?.tx;
+    let tx_1 = compat::tx_from_032(
+        &env.rpc_client()
+            .get_transaction(compat::txid_to_032(txid_1))?
+            .into_model()?
+            .tx,
+    );
 
     let client = ClientExt::get_rpc_client(&env)?;
     let mut emitter = Emitter::new(&client, chain.tip(), 1, core::iter::once(tx_1));
     while let Some(emission) = emitter.next_block()? {
         let height = emission.block_height();
-        chain.apply_header(&emission.block.header, height)?;
+        chain.apply_header(emission.block.header(), height)?;
     }
 
     let changeset = graph.batch_insert_unconfirmed(emitter.mempool()?.update);
@@ -604,7 +632,10 @@ fn test_expect_tx_evicted() -> anyhow::Result<()> {
 
     // Get `prevout` from core.
     let core = env.rpc_client();
-    let tx1 = core.get_transaction(txid_1)?.into_model()?.tx;
+    let tx1 = core
+        .get_transaction(compat::txid_to_032(txid_1))?
+        .into_model()?
+        .tx;
     let txin = &tx1.input[0];
     let op = txin.previous_output;
 
@@ -620,7 +651,7 @@ fn test_expect_tx_evicted() -> anyhow::Result<()> {
         .address()?
         .assume_checked();
 
-    let outputs = [Output::new(addr, Amount::from_btc(49.99)?)];
+    let outputs = [Output::new(addr, bitcoin_032::Amount::from_btc(49.99)?)];
     let tx = core
         .create_raw_transaction(&[utxo], &outputs)?
         .into_model()?
@@ -704,11 +735,12 @@ fn detect_new_mempool_txs() -> anyhow::Result<()> {
     let env = TestEnv::new()?;
     env.mine_blocks(101, None)?;
 
-    let addr = env
-        .rpc_client()
-        .get_new_address(None, None)?
-        .address()?
-        .require_network(Network::Regtest)?;
+    let addr = compat::address_from_032(
+        &env.rpc_client()
+            .get_new_address(None, None)?
+            .address()?
+            .require_network(bitcoin_032::Network::Regtest)?,
+    );
 
     let client = ClientExt::get_rpc_client(&env)?;
     let mut emitter = Emitter::new(

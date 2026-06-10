@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use bdk_bitcoind_rpc::bip158::{Event, FilterIter};
-use bdk_chain::bitcoin::{constants::genesis_block, secp256k1::Secp256k1, Network};
+use bdk_chain::bitcoin::{constants::genesis_block, Network};
 use bdk_chain::indexer::keychain_txout::KeychainTxOutIndex;
 use bdk_chain::local_chain::LocalChain;
 use bdk_chain::miniscript::Descriptor;
@@ -26,7 +26,7 @@ const START_HASH: &str = "0000002bd0f82f8c0c0f1e19128f84c938763641dba85c44bdb6ae
 
 fn main() -> anyhow::Result<()> {
     // Setup receiving chain and graph structures.
-    let secp = Secp256k1::new();
+    let secp = bdk_chain::compat::ms_bitcoin::secp256k1::Secp256k1::new();
     let (descriptor, _) = Descriptor::parse_descriptor(&secp, EXTERNAL)?;
     let (change_descriptor, _) = Descriptor::parse_descriptor(&secp, INTERNAL)?;
     let (mut chain, _) = LocalChain::from_genesis(genesis_block(NETWORK).block_hash());
@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
         println!("\nUnspent");
         for (index, utxo) in unspent {
             // (k, index) | value | outpoint |
-            println!("{:?} | {} | {}", index, utxo.txout.value, utxo.outpoint);
+            println!("{:?} | {} | {}", index, utxo.txout.amount, utxo.outpoint);
         }
     }
 

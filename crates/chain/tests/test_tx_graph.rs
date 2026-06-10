@@ -10,11 +10,11 @@ use bdk_chain::{
     Anchor, ChainOracle, ChainPosition, Merge,
 };
 use bdk_testenv::{block_id, hash, utils::new_tx};
-use bitcoin::hex::FromHex;
 use bitcoin::Witness;
+use bdk_testenv::utils::TestHash;
 use bitcoin::{
-    absolute, hashes::Hash, transaction, Amount, BlockHash, OutPoint, ScriptBuf, SignedAmount,
-    Transaction, TxIn, TxOut, Txid,
+    absolute, transaction, Amount, BlockHash, OutPoint, ScriptPubKeyBuf, ScriptSigBuf, Sequence,
+    SignedAmount, Transaction, TxIn, TxOut, Txid,
 };
 use common::*;
 use core::iter;
@@ -27,27 +27,27 @@ fn insert_txouts() {
     // 2 (Outpoint, TxOut) tuples that denotes original data in the graph, as partial transactions.
     let original_ops = [
         (
-            OutPoint::new(hash!("tx1"), 1),
+            OutPoint { txid: hash!("tx1"), vout: 1 },
             TxOut {
-                value: Amount::from_sat(10_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(10_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
         ),
         (
-            OutPoint::new(hash!("tx1"), 2),
+            OutPoint { txid: hash!("tx1"), vout: 2 },
             TxOut {
-                value: Amount::from_sat(20_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(20_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
         ),
     ];
 
     // Another (OutPoint, TxOut) tuple to be used as update as partial transaction.
     let update_ops = [(
-        OutPoint::new(hash!("tx2"), 0),
+        OutPoint { txid: hash!("tx2"), vout: 0 },
         TxOut {
-            value: Amount::from_sat(20_000),
-            script_pubkey: ScriptBuf::new(),
+            amount: Amount::from_sat_u32(20_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         },
     )];
 
@@ -55,13 +55,13 @@ fn insert_txouts() {
     let update_tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint::COINBASE_PREVOUT,
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(30_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(30_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
     };
 
@@ -136,15 +136,15 @@ fn insert_txouts() {
             (
                 1u32,
                 &TxOut {
-                    value: Amount::from_sat(10_000),
-                    script_pubkey: ScriptBuf::new(),
+                    amount: Amount::from_sat_u32(10_000),
+                    script_pubkey: ScriptPubKeyBuf::new(),
                 }
             ),
             (
                 2u32,
                 &TxOut {
-                    value: Amount::from_sat(20_000),
-                    script_pubkey: ScriptBuf::new(),
+                    amount: Amount::from_sat_u32(20_000),
+                    script_pubkey: ScriptPubKeyBuf::new(),
                 }
             )
         ]
@@ -158,8 +158,8 @@ fn insert_txouts() {
         [(
             0u32,
             &TxOut {
-                value: Amount::from_sat(30_000),
-                script_pubkey: ScriptBuf::new()
+                amount: Amount::from_sat_u32(30_000),
+                script_pubkey: ScriptPubKeyBuf::new()
             }
         )]
         .into()
@@ -184,18 +184,18 @@ fn insert_tx_graph_doesnt_count_coinbase_as_spent() {
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint::COINBASE_PREVOUT,
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![],
+        outputs: vec![],
     };
 
     let mut graph = TxGraph::<ConfirmationBlockTime>::default();
     let changeset = graph.insert_tx(tx);
     assert!(!changeset.is_empty());
-    assert!(graph.outspends(OutPoint::null()).is_empty());
-    assert!(graph.tx_spends(Txid::all_zeros()).next().is_none());
+    assert!(graph.outspends(OutPoint::COINBASE_PREVOUT).is_empty());
+    assert!(graph.tx_spends(Txid::from_byte_array([0; 32])).next().is_none());
 }
 
 #[test]
@@ -203,8 +203,8 @@ fn insert_tx_graph_keeps_track_of_spend() {
     let tx1 = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut::NULL],
+        inputs: vec![],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
     };
 
     let op = OutPoint {
@@ -215,11 +215,11 @@ fn insert_tx_graph_keeps_track_of_spend() {
     let tx2 = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output: op,
-            ..Default::default()
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![],
+        outputs: vec![],
     };
 
     let mut graph1 = TxGraph::<ConfirmationBlockTime>::default();
@@ -244,11 +244,11 @@ fn insert_tx_can_retrieve_full_tx_from_graph() {
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint::COINBASE_PREVOUT,
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
     };
 
     let mut graph = TxGraph::<ConfirmationBlockTime>::default();
@@ -268,15 +268,15 @@ fn insert_tx_displaces_txouts() {
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(42_000),
-            script_pubkey: ScriptBuf::default(),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(42_000),
+            script_pubkey: ScriptPubKeyBuf::default(),
         }],
     };
     let txid = tx.compute_txid();
-    let outpoint = OutPoint::new(txid, 0);
-    let txout = tx.output.first().unwrap();
+    let outpoint = OutPoint { txid: txid, vout: 0 };
+    let txout = tx.outputs.first().unwrap();
 
     let changeset = tx_graph.insert_txout(outpoint, txout.clone());
     assert!(!changeset.is_empty());
@@ -290,29 +290,29 @@ fn insert_tx_displaces_txouts() {
 
 #[test]
 fn insert_tx_witness_precedence() {
-    let previous_output = OutPoint::new(hash!("prev"), 2);
+    let previous_output = OutPoint { txid: hash!("prev"), vout: 2 };
     let unsigned_tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output,
-            script_sig: ScriptBuf::default(),
-            sequence: transaction::Sequence::ENABLE_RBF_NO_LOCKTIME,
+            script_sig: ScriptSigBuf::default(),
+            sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
             witness: Witness::default(),
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(24_000),
-            script_pubkey: ScriptBuf::default(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(24_000),
+            script_pubkey: ScriptPubKeyBuf::default(),
         }],
     };
     let signed_tx = Transaction {
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output,
-            script_sig: ScriptBuf::default(),
-            sequence: transaction::Sequence::ENABLE_RBF_NO_LOCKTIME,
+            script_sig: ScriptSigBuf::default(),
+            sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
             witness: Witness::from_slice(&[
                 // Random witness from mempool.space
-                Vec::from_hex("d59118058bf9e8604cec5c0b4a13430b07286482784da313594e932faad074dc4bd27db7cbfff9ad32450db097342d0148ec21c3033b0c27888fd2fd0de2e9b5")
+                bitcoin::hex::decode_to_vec("d59118058bf9e8604cec5c0b4a13430b07286482784da313594e932faad074dc4bd27db7cbfff9ad32450db097342d0148ec21c3033b0c27888fd2fd0de2e9b5")
                     .unwrap(),
             ]),
         }],
@@ -357,43 +357,43 @@ fn insert_tx_witness_precedence() {
 
     // Smaller witness displaces larger witness and witnesses must not get cleared.
     {
-        let previous_output_2 = OutPoint::new(hash!("prev"), 3);
+        let previous_output_2 = OutPoint { txid: hash!("prev"), vout: 3 };
         let small_wit = Witness::from_slice(&[vec![0u8; 10]]);
         let large_wit = Witness::from_slice(&[vec![0u8; 20]]);
         let other_wit = Witness::from_slice(&[vec![0u8; 21]]);
         let tx_small = Transaction {
-            input: vec![
+            inputs: vec![
                 TxIn {
                     previous_output,
-                    sequence: transaction::Sequence::ENABLE_RBF_NO_LOCKTIME,
+                    sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
                     witness: small_wit.clone(),
-                    ..Default::default()
+                    ..TxIn::EMPTY_COINBASE
                 },
                 TxIn {
                     previous_output: previous_output_2,
-                    sequence: transaction::Sequence::ENABLE_RBF_NO_LOCKTIME,
+                    sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
                     witness: other_wit,
-                    ..Default::default()
+                    ..TxIn::EMPTY_COINBASE
                 },
             ],
             ..unsigned_tx.clone()
         };
         let tx_large = Transaction {
-            input: vec![
+            inputs: vec![
                 // This input has a larger witness than the previous, so we expect that the witness
                 // for this input does not get replaced.
                 TxIn {
                     previous_output,
-                    sequence: transaction::Sequence::ENABLE_RBF_NO_LOCKTIME,
+                    sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
                     witness: large_wit.clone(),
-                    ..Default::default()
+                    ..TxIn::EMPTY_COINBASE
                 },
                 // This input has no witness, so we expect that the witness for this input does not
                 // get replaced either.
                 TxIn {
                     previous_output: previous_output_2,
-                    sequence: transaction::Sequence::ENABLE_RBF_NO_LOCKTIME,
-                    ..Default::default()
+                    sequence: Sequence::ENABLE_LOCKTIME_AND_RBF,
+                    ..TxIn::EMPTY_COINBASE
                 },
             ],
             ..unsigned_tx.clone()
@@ -423,10 +423,10 @@ fn insert_txout_does_not_displace_tx() {
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(42_000),
-            script_pubkey: ScriptBuf::new(),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(42_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
     };
 
@@ -438,8 +438,8 @@ fn insert_txout_does_not_displace_tx() {
             vout: 0,
         },
         TxOut {
-            value: Amount::from_sat(1_337_000),
-            script_pubkey: ScriptBuf::new(),
+            amount: Amount::from_sat_u32(1_337_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         },
     );
 
@@ -449,8 +449,8 @@ fn insert_txout_does_not_displace_tx() {
             vout: 1,
         },
         TxOut {
-            value: Amount::from_sat(1_000_000_000),
-            script_pubkey: ScriptBuf::new(),
+            amount: Amount::from_sat_u32(1_000_000_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         },
     );
 
@@ -461,8 +461,8 @@ fn insert_txout_does_not_displace_tx() {
                 vout: 0
             })
             .unwrap()
-            .value,
-        Amount::from_sat(42_000)
+            .amount,
+        Amount::from_sat_u32(42_000)
     );
     assert_eq!(
         tx_graph.get_txout(OutPoint {
@@ -479,19 +479,19 @@ fn test_calculate_fee() {
     let intx1 = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(100),
-            script_pubkey: ScriptBuf::new(),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(100),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
     };
     let intx2 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(200),
-            script_pubkey: ScriptBuf::new(),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(200),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
     };
 
@@ -501,8 +501,8 @@ fn test_calculate_fee() {
             vout: 0,
         },
         TxOut {
-            value: Amount::from_sat(300),
-            script_pubkey: ScriptBuf::new(),
+            amount: Amount::from_sat_u32(300),
+            script_pubkey: ScriptPubKeyBuf::new(),
         },
     );
 
@@ -513,40 +513,40 @@ fn test_calculate_fee() {
     let mut tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![
+        inputs: vec![
             TxIn {
                 previous_output: OutPoint {
                     txid: intx1.compute_txid(),
                     vout: 0,
                 },
-                ..Default::default()
+                ..TxIn::EMPTY_COINBASE
             },
             TxIn {
                 previous_output: OutPoint {
                     txid: intx2.compute_txid(),
                     vout: 0,
                 },
-                ..Default::default()
+                ..TxIn::EMPTY_COINBASE
             },
             TxIn {
                 previous_output: intxout1.0,
-                ..Default::default()
+                ..TxIn::EMPTY_COINBASE
             },
         ],
-        output: vec![TxOut {
-            value: Amount::from_sat(500),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(500),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
     };
 
-    assert_eq!(graph.calculate_fee(&tx), Ok(Amount::from_sat(100)));
+    assert_eq!(graph.calculate_fee(&tx), Ok(Amount::from_sat_u32(100)));
 
-    tx.input.remove(2);
+    tx.inputs.remove(2);
 
     // fee would be negative, should return CalculateFeeError::NegativeFee
     assert_eq!(
         graph.calculate_fee(&tx),
-        Err(CalculateFeeError::NegativeFee(SignedAmount::from_sat(-200)))
+        Err(CalculateFeeError::NegativeFee(SignedAmount::from_sat_i32(-200)))
     );
 
     // If we have an unknown outpoint, fee should return CalculateFeeError::MissingTxOut.
@@ -554,9 +554,9 @@ fn test_calculate_fee() {
         txid: hash!("unknown_txid"),
         vout: 0,
     };
-    tx.input.push(TxIn {
+    tx.inputs.push(TxIn {
         previous_output: outpoint,
-        ..Default::default()
+        ..TxIn::EMPTY_COINBASE
     });
     assert_eq!(
         graph.calculate_fee(&tx),
@@ -569,11 +569,11 @@ fn test_calculate_fee_on_coinbase() {
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint::COINBASE_PREVOUT,
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
     };
 
     let graph = TxGraph::<()>::default();
@@ -598,128 +598,128 @@ fn test_calculate_fee_on_coinbase() {
 fn test_walk_ancestors() {
     let local_chain = LocalChain::from_blocks(
         (0..=20)
-            .map(|ht| (ht, BlockHash::hash(format!("Block Hash {ht}").as_bytes())))
+            .map(|ht| (ht, BlockHash::hash_data(format!("Block Hash {ht}").as_bytes())))
             .collect(),
     )
     .expect("must contain genesis hash");
     let tip = local_chain.tip();
 
     let tx_a0 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("op0"), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("op0"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL, TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }, TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_b0 spends tx_a0
     let tx_b0 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_a0.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_a0.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL, TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }, TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_b1 spends tx_a0
     let tx_b1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_a0.compute_txid(), 1),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_a0.compute_txid(), vout: 1 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     let tx_b2 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("op1"), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("op1"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_c0 spends tx_b0
     let tx_c0 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_b0.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_b0.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_c1 spends tx_b0
     let tx_c1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_b0.compute_txid(), 1),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_b0.compute_txid(), vout: 1 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_c2 spends tx_b1 and tx_b2
     let tx_c2 = Transaction {
-        input: vec![
+        inputs: vec![
             TxIn {
-                previous_output: OutPoint::new(tx_b1.compute_txid(), 0),
-                ..TxIn::default()
+                previous_output: OutPoint { txid: tx_b1.compute_txid(), vout: 0 },
+                ..TxIn::EMPTY_COINBASE
             },
             TxIn {
-                previous_output: OutPoint::new(tx_b2.compute_txid(), 0),
-                ..TxIn::default()
+                previous_output: OutPoint { txid: tx_b2.compute_txid(), vout: 0 },
+                ..TxIn::EMPTY_COINBASE
             },
         ],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     let tx_c3 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("op2"), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("op2"), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_d0 spends tx_c1
     let tx_d0 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_c1.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_c1.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_d1 spends tx_c2 and tx_c3
     let tx_d1 = Transaction {
-        input: vec![
+        inputs: vec![
             TxIn {
-                previous_output: OutPoint::new(tx_c2.compute_txid(), 0),
-                ..TxIn::default()
+                previous_output: OutPoint { txid: tx_c2.compute_txid(), vout: 0 },
+                ..TxIn::EMPTY_COINBASE
             },
             TxIn {
-                previous_output: OutPoint::new(tx_c3.compute_txid(), 0),
-                ..TxIn::default()
+                previous_output: OutPoint { txid: tx_c3.compute_txid(), vout: 0 },
+                ..TxIn::EMPTY_COINBASE
             },
         ],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_e0 spends tx_d1
     let tx_e0 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_d1.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_d1.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
@@ -794,35 +794,35 @@ fn test_walk_ancestors() {
 
 #[test]
 fn test_conflicting_descendants() {
-    let previous_output = OutPoint::new(hash!("op"), 2);
+    let previous_output = OutPoint { txid: hash!("op"), vout: 2 };
 
     // tx_a spends previous_output
     let tx_a = Transaction {
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output,
-            ..TxIn::default()
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     // tx_a2 spends previous_output and conflicts with tx_a
     let tx_a2 = Transaction {
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output,
-            ..TxIn::default()
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL, TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }, TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(1)
     };
 
     // tx_b spends tx_a
     let tx_b = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_a.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_a.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(2)
     };
 
@@ -844,63 +844,63 @@ fn test_conflicting_descendants() {
 #[test]
 fn test_descendants_no_repeat() {
     let tx_a = Transaction {
-        output: vec![TxOut::NULL, TxOut::NULL, TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }, TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }, TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(0)
     };
 
     let txs_b = (0..3)
         .map(|vout| Transaction {
-            input: vec![TxIn {
-                previous_output: OutPoint::new(tx_a.compute_txid(), vout),
-                ..TxIn::default()
+            inputs: vec![TxIn {
+                previous_output: OutPoint { txid: tx_a.compute_txid(), vout: vout },
+                ..TxIn::EMPTY_COINBASE
             }],
-            output: vec![TxOut::NULL],
+            outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
             ..new_tx(1)
         })
         .collect::<Vec<_>>();
 
     let txs_c = (0..2)
         .map(|vout| Transaction {
-            input: vec![TxIn {
-                previous_output: OutPoint::new(txs_b[vout as usize].compute_txid(), vout),
-                ..TxIn::default()
+            inputs: vec![TxIn {
+                previous_output: OutPoint { txid: txs_b[vout as usize].compute_txid(), vout: vout },
+                ..TxIn::EMPTY_COINBASE
             }],
-            output: vec![TxOut::NULL],
+            outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
             ..new_tx(2)
         })
         .collect::<Vec<_>>();
 
     let tx_d = Transaction {
-        input: vec![
+        inputs: vec![
             TxIn {
-                previous_output: OutPoint::new(txs_c[0].compute_txid(), 0),
-                ..TxIn::default()
+                previous_output: OutPoint { txid: txs_c[0].compute_txid(), vout: 0 },
+                ..TxIn::EMPTY_COINBASE
             },
             TxIn {
-                previous_output: OutPoint::new(txs_c[1].compute_txid(), 0),
-                ..TxIn::default()
+                previous_output: OutPoint { txid: txs_c[1].compute_txid(), vout: 0 },
+                ..TxIn::EMPTY_COINBASE
             },
         ],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(3)
     };
 
     let tx_e = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_d.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_d.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut::NULL],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
         ..new_tx(4)
     };
 
     let txs_not_connected = (10..20)
         .map(|v| Transaction {
-            input: vec![TxIn {
-                previous_output: OutPoint::new(hash!("tx_does_not_exist"), v),
-                ..TxIn::default()
+            inputs: vec![TxIn {
+                previous_output: OutPoint { txid: hash!("tx_does_not_exist"), vout: v },
+                ..TxIn::EMPTY_COINBASE
             }],
-            output: vec![TxOut::NULL],
+            outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
             ..new_tx(v)
         })
         .collect::<Vec<_>>();
@@ -935,7 +935,7 @@ fn test_descendants_no_repeat() {
 fn test_chain_spends() {
     let local_chain = LocalChain::from_blocks(
         (0..=100)
-            .map(|ht| (ht, BlockHash::hash(format!("Block Hash {ht}").as_bytes())))
+            .map(|ht| (ht, BlockHash::hash_data(format!("Block Hash {ht}").as_bytes())))
             .collect(),
     )
     .expect("must have genesis hash");
@@ -944,15 +944,15 @@ fn test_chain_spends() {
     // The parent tx contains 2 outputs. Which are spent by one confirmed and one unconfirmed tx.
     // The parent tx is confirmed at block 95.
     let tx_0 = Transaction {
-        input: vec![],
-        output: vec![
+        inputs: vec![],
+        outputs: vec![
             TxOut {
-                value: Amount::from_sat(10_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(10_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
             TxOut {
-                value: Amount::from_sat(20_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(20_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
         ],
         ..new_tx(0)
@@ -960,18 +960,18 @@ fn test_chain_spends() {
 
     // The first confirmed transaction spends vout: 0. And is confirmed at block 98.
     let tx_1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_0.compute_txid(), 0),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_0.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![
+        outputs: vec![
             TxOut {
-                value: Amount::from_sat(5_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(5_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
             TxOut {
-                value: Amount::from_sat(5_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(5_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
         ],
         ..new_tx(0)
@@ -979,18 +979,18 @@ fn test_chain_spends() {
 
     // The second transactions spends vout:1, and is unconfirmed.
     let tx_2 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_0.compute_txid(), 1),
-            ..TxIn::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_0.compute_txid(), vout: 1 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![
+        outputs: vec![
             TxOut {
-                value: Amount::from_sat(10_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(10_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
             TxOut {
-                value: Amount::from_sat(10_000),
-                script_pubkey: ScriptBuf::new(),
+                amount: Amount::from_sat_u32(10_000),
+                script_pubkey: ScriptPubKeyBuf::new(),
             },
         ],
         ..new_tx(0)
@@ -1037,7 +1037,7 @@ fn test_chain_spends() {
         // Assert that confirmed spends are returned correctly.
         assert_eq!(
             canonical_spends
-                .get(&OutPoint::new(tx_0.compute_txid(), 0))
+                .get(&OutPoint { txid: tx_0.compute_txid(), vout: 0 })
                 .cloned(),
             Some((
                 ChainPosition::Confirmed {
@@ -1071,7 +1071,7 @@ fn test_chain_spends() {
         // Check chain spend returned correctly.
         assert_eq!(
             canonical_spends
-                .get(&OutPoint::new(tx_0.compute_txid(), 1))
+                .get(&OutPoint { txid: tx_0.compute_txid(), vout: 1 })
                 .cloned(),
             Some((
                 ChainPosition::Unconfirmed {
@@ -1085,9 +1085,9 @@ fn test_chain_spends() {
 
     // A conflicting transaction that conflicts with tx_1.
     let tx_1_conflict = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_0.compute_txid(), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_0.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
         ..new_tx(0)
     };
@@ -1104,9 +1104,9 @@ fn test_chain_spends() {
 
     // Another conflicting tx that conflicts with tx_2.
     let tx_2_conflict = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_0.compute_txid(), 1),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_0.compute_txid(), vout: 1 },
+            ..TxIn::EMPTY_COINBASE
         }],
         ..new_tx(0)
     };
@@ -1131,7 +1131,7 @@ fn test_chain_spends() {
         // Chain_spend now catches the new transaction as the spend.
         assert_eq!(
             canonical_spends
-                .get(&OutPoint::new(tx_0.compute_txid(), 1))
+                .get(&OutPoint { txid: tx_0.compute_txid(), vout: 1 })
                 .cloned(),
             Some((
                 ChainPosition::Unconfirmed {
@@ -1362,17 +1362,17 @@ fn tx_graph_update_conversion() {
 
     fn make_tx(v: i32) -> Transaction {
         Transaction {
-            version: transaction::Version(v),
+            version: transaction::Version::maybe_non_standard(v as u32),
             lock_time: absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
+            inputs: vec![],
+            outputs: vec![],
         }
     }
 
     fn make_txout(a: u64) -> TxOut {
         TxOut {
-            value: Amount::from_sat(a),
-            script_pubkey: ScriptBuf::default(),
+            amount: Amount::from_sat(a).expect("valid amount"),
+            script_pubkey: ScriptPubKeyBuf::default(),
         }
     }
 
@@ -1392,9 +1392,9 @@ fn tx_graph_update_conversion() {
             let mut tx_update = TxUpdate::default();
             tx_update.txs = vec![make_tx(0).into(), make_tx(1).into()];
             tx_update.txouts = [
-                (OutPoint::new(hash!("a"), 0), make_txout(0)),
-                (OutPoint::new(hash!("a"), 1), make_txout(1)),
-                (OutPoint::new(hash!("b"), 0), make_txout(2)),
+                (OutPoint { txid: hash!("a"), vout: 0 }, make_txout(0)),
+                (OutPoint { txid: hash!("a"), vout: 1 }, make_txout(1)),
+                (OutPoint { txid: hash!("b"), vout: 0 }, make_txout(2)),
             ]
             .into();
             tx_update
@@ -1403,9 +1403,9 @@ fn tx_graph_update_conversion() {
             let mut tx_update = TxUpdate::default();
             tx_update.txs = vec![make_tx(0).into(), make_tx(1).into()];
             tx_update.txouts = [
-                (OutPoint::new(hash!("a"), 0), make_txout(0)),
-                (OutPoint::new(hash!("a"), 1), make_txout(1)),
-                (OutPoint::new(hash!("b"), 0), make_txout(2)),
+                (OutPoint { txid: hash!("a"), vout: 0 }, make_txout(0)),
+                (OutPoint { txid: hash!("a"), vout: 1 }, make_txout(1)),
+                (OutPoint { txid: hash!("b"), vout: 0 }, make_txout(2)),
             ]
             .into();
             tx_update.anchors = [
@@ -1419,9 +1419,9 @@ fn tx_graph_update_conversion() {
             let mut tx_update = TxUpdate::default();
             tx_update.txs = vec![make_tx(0).into(), make_tx(1).into()];
             tx_update.txouts = [
-                (OutPoint::new(hash!("a"), 0), make_txout(0)),
-                (OutPoint::new(hash!("a"), 1), make_txout(1)),
-                (OutPoint::new(hash!("d"), 0), make_txout(2)),
+                (OutPoint { txid: hash!("a"), vout: 0 }, make_txout(0)),
+                (OutPoint { txid: hash!("a"), vout: 1 }, make_txout(1)),
+                (OutPoint { txid: hash!("d"), vout: 0 }, make_txout(2)),
             ]
             .into();
             tx_update.anchors = [
@@ -1517,13 +1517,13 @@ fn test_get_first_seen_of_a_tx() {
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint::COINBASE_PREVOUT,
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(50_000),
-            script_pubkey: ScriptBuf::new(),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(50_000),
+            script_pubkey: ScriptPubKeyBuf::new(),
         }],
     };
     let txid = tx.compute_txid();

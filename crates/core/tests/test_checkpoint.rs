@@ -51,7 +51,7 @@ fn checkpoint_destruction_is_sound() {
     let mut cp = CheckPoint::new(0, hash!("g"));
     let end = 10_000;
     for height in 1u32..end {
-        let hash: BlockHash = bitcoin::hashes::Hash::hash(height.to_be_bytes().as_slice());
+        let hash: BlockHash = bdk_testenv::utils::TestHash::hash_data(height.to_be_bytes().as_slice());
         cp = cp.push(height, hash).unwrap();
     }
     assert_eq!(cp.iter().count() as u32, end);
@@ -66,7 +66,7 @@ impl ToBlockHash for BlockWithTime {
     fn to_blockhash(&self) -> BlockHash {
         // Generate a deterministic hash from the height
         let hash_bytes = bitcoin::hashes::sha256d::Hash::hash(&self.0.to_le_bytes());
-        BlockHash::from_raw_hash(hash_bytes)
+        BlockHash::from_byte_array(hash_bytes.to_byte_array())
     }
 }
 

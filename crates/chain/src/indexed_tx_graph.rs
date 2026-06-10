@@ -369,7 +369,7 @@ where
     /// Irrelevant transactions in `block` will be ignored.
     pub fn apply_block_relevant(
         &mut self,
-        block: &Block,
+        block: &Block<bitcoin::block::Checked>,
         height: u32,
     ) -> ChangeSet<A, I::ChangeSet> {
         let block_id = BlockId {
@@ -377,7 +377,7 @@ where
             height,
         };
         let mut changeset = ChangeSet::<A, I::ChangeSet>::default();
-        for (tx_pos, tx) in block.txdata.iter().enumerate() {
+        for (tx_pos, tx) in block.transactions().iter().enumerate() {
             changeset.indexer.merge(self.index.index_tx(tx));
             if self.is_tx_or_conflict_relevant(tx) {
                 let txid = tx.compute_txid();
@@ -403,13 +403,17 @@ where
     /// To only insert relevant transactions, use [`apply_block_relevant`] instead.
     ///
     /// [`apply_block_relevant`]: IndexedTxGraph::apply_block_relevant
-    pub fn apply_block(&mut self, block: Block, height: u32) -> ChangeSet<A, I::ChangeSet> {
+    pub fn apply_block(
+        &mut self,
+        block: Block<bitcoin::block::Checked>,
+        height: u32,
+    ) -> ChangeSet<A, I::ChangeSet> {
         let block_id = BlockId {
             hash: block.block_hash(),
             height,
         };
         let mut graph = tx_graph::ChangeSet::default();
-        for (tx_pos, tx) in block.txdata.iter().enumerate() {
+        for (tx_pos, tx) in block.transactions().iter().enumerate() {
             let anchor = TxPosInBlock {
                 block: &block,
                 block_id,

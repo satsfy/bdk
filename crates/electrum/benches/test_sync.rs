@@ -1,11 +1,6 @@
-use bdk_chain::bitcoin::{Address, Amount, ScriptBuf};
+use bdk_chain::bitcoin::{Address, Amount, ScriptPubKeyBuf};
 use bdk_core::{
-    bitcoin::{
-        consensus::WriteExt,
-        hashes::Hash,
-        key::{Secp256k1, UntweakedPublicKey},
-        Network, TapNodeHash,
-    },
+    bitcoin::{script::ScriptPubKeyBufExt as _, Network, TapNodeHash, XOnlyPublicKey},
     spk_client::SyncRequest,
     CheckPoint,
 };
@@ -18,21 +13,21 @@ use std::{collections::BTreeSet, time::Duration};
 // Batch size for `sync_with_electrum`.
 const BATCH_SIZE: usize = 100;
 
-pub fn get_test_spk(i: usize) -> ScriptBuf {
+pub fn get_test_spk(i: usize) -> ScriptPubKeyBuf {
     const PK_BYTES: &[u8] = &[
         12, 244, 72, 4, 163, 4, 211, 81, 159, 82, 153, 123, 125, 74, 142, 40, 55, 237, 191, 231,
         31, 114, 89, 165, 83, 141, 8, 203, 93, 240, 53, 101,
     ];
-    let secp = Secp256k1::new();
-    let pk = UntweakedPublicKey::from_slice(PK_BYTES).expect("Must be valid PK");
-    let mut engine = TapNodeHash::engine();
-    engine.emit_u64(i as u64).expect("must emit");
-    ScriptBuf::new_p2tr(&secp, pk, Some(TapNodeHash::from_engine(engine)))
+    let pk = XOnlyPublicKey::from_byte_array(PK_BYTES.try_into().expect("must be 32 bytes"))
+        .expect("Must be valid PK");
+    let mut merkle_root_bytes = [0u8; 32];
+    merkle_root_bytes[..8].copy_from_slice(&(i as u64).to_le_bytes());
+    ScriptPubKeyBuf::new_p2tr(pk, Some(TapNodeHash::from_byte_array(merkle_root_bytes)))
 }
 
 fn sync_with_electrum<E: ElectrumApi>(
     client: &BdkElectrumClient<E>,
-    spks: &[ScriptBuf],
+    spks: &[ScriptPubKeyBuf],
     chain_tip: &CheckPoint,
 ) -> anyhow::Result<()> {
     let update = client.sync(
@@ -64,7 +59,7 @@ pub fn test_sync_performance(c: &mut Criterion) {
     for i in 0..NUM_BLOCKS {
         let spk = get_test_spk(i);
         let addr = Address::from_script(&spk, Network::Regtest).unwrap();
-        env.send(&addr, Amount::from_sat(10_000)).unwrap();
+        env.send(&addr, Amount::from_sat_u32(10_000)).unwrap();
         env.mine_blocks(1, None).unwrap();
 
         spks.push(spk);
@@ -77,15 +72,7 @@ pub fn test_sync_performance(c: &mut Criterion) {
     );
 
     // Setup receiver.
-    let genesis_cp = CheckPoint::new(
-        0,
-        env.bitcoind
-            .client
-            .get_block_hash(0)
-            .unwrap()
-            .block_hash()
-            .unwrap(),
-    );
+    let genesis_cp = CheckPoint::new(0, env.genesis_hash().unwrap());
 
     {
         let electrum_client =

@@ -20,20 +20,21 @@ use bdk_testenv::{
     utils::{new_tx, DESCRIPTORS},
     TestEnv,
 };
+use bdk_testenv::compat::{self, bitcoin_032};
+use bitcoin::script::ScriptBufExt as _;
 use bitcoin::{
-    secp256k1::Secp256k1, Address, Amount, BlockHash, Network, OutPoint, ScriptBuf, Transaction,
-    TxIn, TxOut, Txid,
+    Address, Amount, BlockHash, Network, OutPoint, ScriptPubKeyBuf, Transaction, TxIn, TxOut, Txid,
 };
+use miniscript::bitcoin::secp256k1::Secp256k1;
 use miniscript::Descriptor;
 
-fn gen_spk() -> ScriptBuf {
-    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+fn gen_spk() -> ScriptPubKeyBuf {
+    use bitcoin::script::ScriptPubKeyBufExt as _;
+    use bitcoin::secp256k1::SecretKey;
 
-    let secp = Secp256k1::new();
-    let (x_only_pk, _) = SecretKey::new(&mut rand::thread_rng())
-        .public_key(&secp)
-        .x_only_public_key();
-    ScriptBuf::new_p2tr(&secp, x_only_pk, None)
+    let sk = SecretKey::from_byte_array([0x42; 32]).expect("valid secret key");
+    let (x_only_pk, _) = sk.public_key().x_only_public_key();
+    ScriptPubKeyBuf::new_p2tr(x_only_pk, None)
 }
 
 /// Conflicts of relevant transactions must also be considered relevant.
@@ -65,7 +66,7 @@ fn relevant_conflicts() -> anyhow::Result<()> {
             let sender_addr = client
                 .get_new_address(None, None)?
                 .address()?
-                .require_network(Network::Regtest)?;
+                .require_network(bitcoin_032::Network::Regtest)?;
 
             let recv_spk = gen_spk();
             let recv_addr = Address::from_script(&recv_spk, &bitcoin::params::REGTEST)?;
@@ -73,7 +74,7 @@ fn relevant_conflicts() -> anyhow::Result<()> {
             let mut graph = SpkTxGraph::default();
             assert!(graph.index.insert_spk((), recv_spk));
 
-            env.mine_blocks(1, Some(sender_addr.clone()))?;
+            env.mine_blocks(1, Some(compat::address_from_032(&sender_addr)))?;
             env.mine_blocks(101, None)?;
 
             let tx_input = client
@@ -82,32 +83,45 @@ fn relevant_conflicts() -> anyhow::Result<()> {
                 .into_iter()
                 .take(1)
                 .map(|r| Input {
-                    txid: Txid::from_str(&r.txid).expect("should successfully parse the `Txid`"),
+                    txid: r
+                        .txid
+                        .parse::<bitcoin_032::Txid>()
+                        .expect("should successfully parse the `Txid`"),
                     vout: r.vout as u64,
                     sequence: None,
                 })
                 .collect::<Vec<_>>();
             let tx_send = {
-                let outputs = [Output::new(recv_addr, Amount::from_btc(49.999_99)?)];
+                let outputs = [Output::new(
+                    compat::address_to_032(&recv_addr),
+                    bitcoin_032::Amount::from_btc(49.999_99)?,
+                )];
                 let tx = client
                     .create_raw_transaction(&tx_input, &outputs)?
                     .into_model()?
                     .0;
-                client
-                    .sign_raw_transaction_with_wallet(&tx)?
-                    .into_model()?
-                    .tx
+                compat::tx_from_032(
+                    &client
+                        .sign_raw_transaction_with_wallet(&tx)?
+                        .into_model()?
+                        .tx,
+                )
             };
             let tx_cancel = {
-                let outputs = [Output::new(sender_addr, Amount::from_btc(49.999_98)?)];
+                let outputs = [Output::new(
+                    sender_addr,
+                    bitcoin_032::Amount::from_btc(49.999_98)?,
+                )];
                 let tx = client
                     .create_raw_transaction(&tx_input, &outputs)?
                     .into_model()?
                     .0;
-                client
-                    .sign_raw_transaction_with_wallet(&tx)?
-                    .into_model()?
-                    .tx
+                compat::tx_from_032(
+                    &client
+                        .sign_raw_transaction_with_wallet(&tx)?
+                        .into_model()?
+                        .tx,
+                )
             };
 
             Ok(Self {
@@ -125,7 +139,7 @@ fn relevant_conflicts() -> anyhow::Result<()> {
             let client = self.env.rpc_client();
             for height in 0..=client.get_block_count()?.into_model().0 {
                 let hash = client.get_block_hash(height)?.block_hash()?;
-                let block = client.get_block(hash)?;
+                let block = compat::block_from_032(&client.get_block(hash)?);
                 let _ = self.graph.apply_block_relevant(&block, height as _);
             }
 
@@ -133,7 +147,7 @@ fn relevant_conflicts() -> anyhow::Result<()> {
             let unconfirmed_txs: Vec<(Transaction, u64)> = mempool_txids
                 .iter()
                 .map(|txid| -> anyhow::Result<_> {
-                    let tx = client.get_raw_transaction(*txid)?.transaction()?;
+                    let tx = compat::tx_from_032(&client.get_raw_transaction(*txid)?.transaction()?);
                     Ok((tx, 0))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -146,13 +160,21 @@ fn relevant_conflicts() -> anyhow::Result<()> {
         /// Broadcast the original sending transaction.
         fn broadcast_send(&self) -> anyhow::Result<Txid> {
             let client = self.env.rpc_client();
-            Ok(client.send_raw_transaction(&self.tx_send)?.txid()?)
+            Ok(compat::txid_from_032(
+                client
+                    .send_raw_transaction(&compat::tx_to_032(&self.tx_send))?
+                    .txid()?,
+            ))
         }
 
         /// Broadcast the cancellation transaction.
         fn broadcast_cancel(&self) -> anyhow::Result<Txid> {
             let client = self.env.rpc_client();
-            Ok(client.send_raw_transaction(&self.tx_cancel)?.txid()?)
+            Ok(compat::txid_from_032(
+                client
+                    .send_raw_transaction(&compat::tx_to_032(&self.tx_cancel))?
+                    .txid()?,
+            ))
         }
     }
 
@@ -217,8 +239,8 @@ fn insert_relevant_txs() {
     use bdk_chain::indexer::keychain_txout;
     let (descriptor, _) = Descriptor::parse_descriptor(&Secp256k1::signing_only(), DESCRIPTORS[0])
         .expect("must be valid");
-    let spk_0 = descriptor.at_derivation_index(0).unwrap().script_pubkey();
-    let spk_1 = descriptor.at_derivation_index(9).unwrap().script_pubkey();
+    let spk_0 = bdk_chain::compat::spk_from_ms(descriptor.at_derivation_index(0).unwrap().script_pubkey());
+    let spk_1 = bdk_chain::compat::spk_from_ms(descriptor.at_derivation_index(9).unwrap().script_pubkey());
     let lookahead = 10;
 
     let mut graph = IndexedTxGraph::<ConfirmationBlockTime, KeychainTxOutIndex<()>>::new({
@@ -229,13 +251,13 @@ fn insert_relevant_txs() {
     });
 
     let tx_a = Transaction {
-        output: vec![
+        outputs: vec![
             TxOut {
-                value: Amount::from_sat(10_000),
+                amount: Amount::from_sat_u32(10_000),
                 script_pubkey: spk_0,
             },
             TxOut {
-                value: Amount::from_sat(20_000),
+                amount: Amount::from_sat_u32(20_000),
                 script_pubkey: spk_1,
             },
         ],
@@ -243,17 +265,17 @@ fn insert_relevant_txs() {
     };
 
     let tx_b = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_a.compute_txid(), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_a.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
         ..new_tx(1)
     };
 
     let tx_c = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx_a.compute_txid(), 1),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx_a.compute_txid(), vout: 1 },
+            ..TxIn::EMPTY_COINBASE
         }],
         ..new_tx(2)
     };
@@ -358,8 +380,8 @@ fn test_list_owned_txouts() {
 
     // Get trusted and untrusted addresses
 
-    let mut trusted_spks: Vec<ScriptBuf> = Vec::new();
-    let mut untrusted_spks: Vec<ScriptBuf> = Vec::new();
+    let mut trusted_spks: Vec<ScriptPubKeyBuf> = Vec::new();
+    let mut untrusted_spks: Vec<ScriptPubKeyBuf> = Vec::new();
 
     {
         // we need to scope here to take immutable reference of the graph
@@ -386,12 +408,12 @@ fn test_list_owned_txouts() {
 
     // tx1 is the genesis coinbase
     let tx1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint::COINBASE_PREVOUT,
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(70000),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(70000),
             script_pubkey: trusted_spks[0].to_owned(),
         }],
         ..new_tx(1)
@@ -399,8 +421,8 @@ fn test_list_owned_txouts() {
 
     // tx2 is an incoming transaction received at untrusted keychain at block 1.
     let tx2 = Transaction {
-        output: vec![TxOut {
-            value: Amount::from_sat(30000),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(30000),
             script_pubkey: untrusted_spks[0].to_owned(),
         }],
         ..new_tx(2)
@@ -408,12 +430,12 @@ fn test_list_owned_txouts() {
 
     // tx3 spends tx2 and gives a change back in trusted keychain. Confirmed at Block 2.
     let tx3 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(tx2.compute_txid(), 0),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: tx2.compute_txid(), vout: 0 },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::from_sat(10000),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(10000),
             script_pubkey: trusted_spks[1].to_owned(),
         }],
         ..new_tx(3)
@@ -421,8 +443,8 @@ fn test_list_owned_txouts() {
 
     // tx4 is an external transaction receiving at untrusted keychain, unconfirmed.
     let tx4 = Transaction {
-        output: vec![TxOut {
-            value: Amount::from_sat(20000),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(20000),
             script_pubkey: untrusted_spks[1].to_owned(),
         }],
         ..new_tx(4)
@@ -430,8 +452,8 @@ fn test_list_owned_txouts() {
 
     // tx5 is an external transaction receiving at trusted keychain, unconfirmed.
     let tx5 = Transaction {
-        output: vec![TxOut {
-            value: Amount::from_sat(15000),
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(15000),
             script_pubkey: trusted_spks[2].to_owned(),
         }],
         ..new_tx(5)
@@ -575,9 +597,9 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: Amount::from_sat(70000),          // immature coinbase
-                trusted_pending: Amount::from_sat(25000),   // tx3, tx5
-                untrusted_pending: Amount::from_sat(20000), // tx4
+                immature: Amount::from_sat_u32(70000),          // immature coinbase
+                trusted_pending: Amount::from_sat_u32(25000),   // tx3, tx5
+                untrusted_pending: Amount::from_sat_u32(20000), // tx4
                 confirmed: Amount::ZERO                     // Nothing is confirmed yet
             }
         );
@@ -613,10 +635,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: Amount::from_sat(70000),          // immature coinbase
-                trusted_pending: Amount::from_sat(25000),   // tx3, tx5
-                untrusted_pending: Amount::from_sat(20000), // tx4
-                confirmed: Amount::from_sat(0)              // tx2 got confirmed (but spent by 3)
+                immature: Amount::from_sat_u32(70000),          // immature coinbase
+                trusted_pending: Amount::from_sat_u32(25000),   // tx3, tx5
+                untrusted_pending: Amount::from_sat_u32(20000), // tx4
+                confirmed: Amount::from_sat_u32(0)              // tx2 got confirmed (but spent by 3)
             }
         );
     }
@@ -654,10 +676,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: Amount::from_sat(70000),          // immature coinbase
-                trusted_pending: Amount::from_sat(15000),   // tx5
-                untrusted_pending: Amount::from_sat(20000), // tx4
-                confirmed: Amount::from_sat(10000)          // tx3 got confirmed
+                immature: Amount::from_sat_u32(70000),          // immature coinbase
+                trusted_pending: Amount::from_sat_u32(15000),   // tx5
+                untrusted_pending: Amount::from_sat_u32(20000), // tx4
+                confirmed: Amount::from_sat_u32(10000)          // tx3 got confirmed
             }
         );
     }
@@ -695,10 +717,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: Amount::from_sat(70000),          // immature coinbase
-                trusted_pending: Amount::from_sat(15000),   // tx5
-                untrusted_pending: Amount::from_sat(20000), // tx4
-                confirmed: Amount::from_sat(10000)          // tx3 is confirmed
+                immature: Amount::from_sat_u32(70000),          // immature coinbase
+                trusted_pending: Amount::from_sat_u32(15000),   // tx5
+                untrusted_pending: Amount::from_sat_u32(20000), // tx4
+                confirmed: Amount::from_sat_u32(10000)          // tx3 is confirmed
             }
         );
     }
@@ -712,9 +734,9 @@ fn test_list_owned_txouts() {
             balance,
             Balance {
                 immature: Amount::ZERO,                     // coinbase matured
-                trusted_pending: Amount::from_sat(15000),   // tx5
-                untrusted_pending: Amount::from_sat(20000), // tx4
-                confirmed: Amount::from_sat(80000)          // tx1 + tx3
+                trusted_pending: Amount::from_sat_u32(15000),   // tx5
+                untrusted_pending: Amount::from_sat_u32(20000), // tx4
+                confirmed: Amount::from_sat_u32(80000)          // tx1 + tx3
             }
         );
     }
@@ -744,7 +766,7 @@ fn test_get_chain_position() {
     }
 
     // addr: bcrt1qc6fweuf4xjvz4x3gx3t9e0fh4hvqyu2qw4wvxm
-    let spk = ScriptBuf::from_hex("0014c692ecf13534982a9a2834565cbd37add8027140").unwrap();
+    let spk = ScriptPubKeyBuf::from_hex("0014c692ecf13534982a9a2834565cbd37add8027140").unwrap();
     let mut graph = IndexedTxGraph::new({
         let mut index = SpkTxOutIndex::default();
         let _ = index.insert_spk(0u32, spk.clone());
@@ -809,8 +831,8 @@ fn test_get_chain_position() {
         TestCase {
             name: "tx no anchors or last_seen - no chain pos",
             tx: Transaction {
-                output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                outputs: vec![TxOut {
+                    amount: Amount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(0)
@@ -822,8 +844,8 @@ fn test_get_chain_position() {
         TestCase {
             name: "tx last_seen - unconfirmed",
             tx: Transaction {
-                output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                outputs: vec![TxOut {
+                    amount: Amount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(1)
@@ -838,8 +860,8 @@ fn test_get_chain_position() {
         TestCase {
             name: "tx anchor in best chain - confirmed",
             tx: Transaction {
-                output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                outputs: vec![TxOut {
+                    amount: Amount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(2)
@@ -854,8 +876,8 @@ fn test_get_chain_position() {
         TestCase {
             name: "tx unknown anchor with last_seen - unconfirmed",
             tx: Transaction {
-                output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                outputs: vec![TxOut {
+                    amount: Amount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(3)
@@ -870,8 +892,8 @@ fn test_get_chain_position() {
         TestCase {
             name: "tx unknown anchor - unconfirmed",
             tx: Transaction {
-                output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                outputs: vec![TxOut {
+                    amount: Amount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(4)

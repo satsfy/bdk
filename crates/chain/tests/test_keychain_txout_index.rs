@@ -9,7 +9,9 @@ use bdk_testenv::{
     hash,
     utils::{new_tx, DESCRIPTORS},
 };
-use bitcoin::{secp256k1::Secp256k1, Amount, OutPoint, ScriptBuf, Transaction, TxOut};
+use bdk_chain::compat;
+use bitcoin::{Amount, OutPoint, ScriptPubKeyBuf, Transaction, TxOut};
+use miniscript::bitcoin::secp256k1::Secp256k1;
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
@@ -28,7 +30,7 @@ impl core::fmt::Display for TestKeychain {
 }
 
 fn parse_descriptor(descriptor: &str) -> Descriptor<DescriptorPublicKey> {
-    let secp = bdk_chain::bitcoin::secp256k1::Secp256k1::signing_only();
+    let secp = Secp256k1::signing_only();
     Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, descriptor)
         .unwrap()
         .0
@@ -52,11 +54,13 @@ fn init_txout_index(
     txout_index
 }
 
-fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> ScriptBuf {
-    descriptor
-        .derived_descriptor(&Secp256k1::verification_only(), index)
-        .expect("must derive")
-        .script_pubkey()
+fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> ScriptPubKeyBuf {
+    compat::spk_from_ms(
+        descriptor
+            .derived_descriptor(&Secp256k1::verification_only(), index)
+            .expect("must derive")
+            .script_pubkey(),
+    )
 }
 
 // We create two empty changesets lhs and rhs, we then insert various descriptors with various
@@ -67,7 +71,7 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 // - New keychain gets added if the keychain is in `other` but not in `self`.
 #[test]
 fn merge_changesets_check_last_revealed() {
-    let secp = bitcoin::secp256k1::Secp256k1::signing_only();
+    let secp = Secp256k1::signing_only();
     let descriptor_ids: Vec<_> = DESCRIPTORS
         .iter()
         .take(4)
@@ -127,7 +131,7 @@ fn test_set_all_derivation_indices() {
         (internal_descriptor.descriptor_id(), 24),
     ]
     .into();
-    let spk_cache: BTreeMap<DescriptorId, BTreeMap<u32, ScriptBuf>> = [
+    let spk_cache: BTreeMap<DescriptorId, BTreeMap<u32, ScriptPubKeyBuf>> = [
         (
             external_descriptor.descriptor_id(),
             SpkIterator::new_with_range(&external_descriptor, 0..=12).collect(),
@@ -294,20 +298,24 @@ fn test_lookahead() {
     let internal_iter = last_internal_index - last_external_index..=last_internal_index;
     for (external_index, internal_index) in external_iter.zip(internal_iter) {
         let tx = Transaction {
-            output: vec![
+            outputs: vec![
                 TxOut {
-                    script_pubkey: external_descriptor
-                        .at_derivation_index(external_index)
-                        .unwrap()
-                        .script_pubkey(),
-                    value: Amount::from_sat(10_000),
+                    script_pubkey: compat::spk_from_ms(
+                        external_descriptor
+                            .at_derivation_index(external_index)
+                            .unwrap()
+                            .script_pubkey(),
+                    ),
+                    amount: Amount::from_sat_u32(10_000),
                 },
                 TxOut {
-                    script_pubkey: internal_descriptor
-                        .at_derivation_index(internal_index)
-                        .unwrap()
-                        .script_pubkey(),
-                    value: Amount::from_sat(10_000),
+                    script_pubkey: compat::spk_from_ms(
+                        internal_descriptor
+                            .at_derivation_index(internal_index)
+                            .unwrap()
+                            .script_pubkey(),
+                    ),
+                    amount: Amount::from_sat_u32(10_000),
                 },
             ],
             ..new_tx(external_index)
@@ -352,24 +360,26 @@ fn test_scan_with_lookahead() {
         true,
     );
 
-    let spks: BTreeMap<u32, ScriptBuf> = [0, 10, 20, 30]
+    let spks: BTreeMap<u32, ScriptPubKeyBuf> = [0, 10, 20, 30]
         .into_iter()
         .map(|i| {
             (
                 i,
-                external_descriptor
-                    .at_derivation_index(i)
-                    .unwrap()
-                    .script_pubkey(),
+                compat::spk_from_ms(
+                    external_descriptor
+                        .at_derivation_index(i)
+                        .unwrap()
+                        .script_pubkey(),
+                ),
             )
         })
         .collect();
 
     for (&spk_i, spk) in &spks {
-        let op = OutPoint::new(hash!("fake tx"), spk_i);
+        let op = OutPoint { txid: hash!("fake tx"), vout: spk_i };
         let txout = TxOut {
             script_pubkey: spk.clone(),
-            value: Amount::ZERO,
+            amount: Amount::ZERO,
         };
 
         let changeset = txout_index.index_txout(op, &txout);
@@ -388,14 +398,16 @@ fn test_scan_with_lookahead() {
     }
 
     // now try with index 41 (lookahead surpassed), we expect that the txout to not be indexed
-    let spk_41 = external_descriptor
-        .at_derivation_index(41)
-        .unwrap()
-        .script_pubkey();
-    let op = OutPoint::new(hash!("fake tx"), 41);
+    let spk_41 = compat::spk_from_ms(
+        external_descriptor
+            .at_derivation_index(41)
+            .unwrap()
+            .script_pubkey(),
+    );
+    let op = OutPoint { txid: hash!("fake tx"), vout: 41 };
     let txout = TxOut {
         script_pubkey: spk_41,
-        value: Amount::ZERO,
+        amount: Amount::ZERO,
     };
     let changeset = txout_index.index_txout(op, &txout);
     assert!(changeset.is_empty());
@@ -407,10 +419,10 @@ fn test_wildcard_derivations() {
     let external_descriptor = parse_descriptor(DESCRIPTORS[0]);
     let internal_descriptor = parse_descriptor(DESCRIPTORS[1]);
     let mut txout_index = init_txout_index(external_descriptor.clone(), internal_descriptor.clone(), 0, true);
-    let external_spk_0 = external_descriptor.at_derivation_index(0).unwrap().script_pubkey();
-    let external_spk_16 = external_descriptor.at_derivation_index(16).unwrap().script_pubkey();
-    let external_spk_26 = external_descriptor.at_derivation_index(26).unwrap().script_pubkey();
-    let external_spk_27 = external_descriptor.at_derivation_index(27).unwrap().script_pubkey();
+    let external_spk_0 = bdk_chain::compat::spk_from_ms(external_descriptor.at_derivation_index(0).unwrap().script_pubkey());
+    let external_spk_16 = bdk_chain::compat::spk_from_ms(external_descriptor.at_derivation_index(16).unwrap().script_pubkey());
+    let external_spk_26 = bdk_chain::compat::spk_from_ms(external_descriptor.at_derivation_index(26).unwrap().script_pubkey());
+    let external_spk_27 = bdk_chain::compat::spk_from_ms(external_descriptor.at_derivation_index(27).unwrap().script_pubkey());
 
     // - nothing is derived
     // - unused list is also empty
@@ -466,13 +478,15 @@ fn test_wildcard_derivations() {
 fn test_non_wildcard_derivations() {
     let mut txout_index = KeychainTxOutIndex::<TestKeychain>::new(0, true);
 
-    let secp = bitcoin::secp256k1::Secp256k1::signing_only();
+    let secp = Secp256k1::signing_only();
     let (no_wildcard_descriptor, _) =
         Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, DESCRIPTORS[6]).unwrap();
-    let external_spk = no_wildcard_descriptor
-        .at_derivation_index(0)
-        .unwrap()
-        .script_pubkey();
+    let external_spk = compat::spk_from_ms(
+        no_wildcard_descriptor
+            .at_derivation_index(0)
+            .unwrap()
+            .script_pubkey(),
+    );
 
     let _ = txout_index
         .insert_descriptor(TestKeychain::External, no_wildcard_descriptor.clone())
@@ -724,9 +738,9 @@ fn when_querying_over_a_range_of_keychains_the_utxos_should_show_up() {
             // skip one in the middle to see if uncovers any bugs
             indexer.reveal_next_spk(i);
         }
-        tx.output.push(TxOut {
-            script_pubkey: descriptor.at_derivation_index(0).unwrap().script_pubkey(),
-            value: Amount::from_sat(10_000),
+        tx.outputs.push(TxOut {
+            script_pubkey: bdk_chain::compat::spk_from_ms(descriptor.at_derivation_index(0).unwrap().script_pubkey()),
+            amount: Amount::from_sat_u32(10_000),
         });
     }
 

@@ -15,13 +15,14 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
+use bdk_core::bitcoin::{block::Checked, Block, BlockHash, Transaction, Txid};
 use bdk_core::collections::{HashMap, HashSet};
 use bdk_core::{BlockId, CheckPoint};
-use bitcoin::{Block, BlockHash, Transaction, Txid};
 use bitcoincore_rpc::{bitcoincore_rpc_json, RpcApi};
 use core::ops::Deref;
 
 pub mod bip158;
+pub mod compat;
 
 pub use bitcoincore_rpc;
 
@@ -133,7 +134,11 @@ where
         loop {
             rpc_tip_height = client.get_block_count()?;
             rpc_tip_hash = client.get_block_hash(rpc_tip_height)?;
-            rpc_mempool = client.get_raw_mempool()?;
+            rpc_mempool = client
+                .get_raw_mempool()?
+                .into_iter()
+                .map(compat::txid_from_032)
+                .collect::<Vec<_>>();
             rpc_mempool_txids = rpc_mempool.iter().copied().collect::<HashSet<Txid>>();
             let is_still_at_tip = rpc_tip_hash == client.get_block_hash(rpc_tip_height)?
                 && rpc_tip_height == client.get_block_count()?;
@@ -148,9 +153,10 @@ where
                 .filter_map(|txid| -> Option<Result<_, bitcoincore_rpc::Error>> {
                     let tx = match self.mempool_snapshot.get(&txid) {
                         Some(tx) => tx.clone(),
-                        None => match client.get_raw_transaction(&txid, None) {
+                        None => match client.get_raw_transaction(&compat::txid_to_032(txid), None)
+                        {
                             Ok(tx) => {
-                                let tx = Arc::new(tx);
+                                let tx = Arc::new(compat::tx_from_032(&tx));
                                 self.mempool_snapshot.insert(txid, tx.clone());
                                 tx
                             }
@@ -164,8 +170,8 @@ where
             ..Default::default()
         };
 
-        let at_tip =
-            rpc_tip_height == self.last_cp.height() as u64 && rpc_tip_hash == self.last_cp.hash();
+        let at_tip = rpc_tip_height == self.last_cp.height() as u64
+            && compat::blockhash_from_032(rpc_tip_hash) == self.last_cp.hash();
 
         if at_tip {
             // We only emit evicted transactions when we have already emitted the RPC tip. This is
@@ -199,10 +205,16 @@ where
     }
 
     /// Emit the next block height and block (if any).
-    pub fn next_block(&mut self) -> Result<Option<BlockEvent<Block>>, bitcoincore_rpc::Error> {
-        if let Some((checkpoint, block)) = poll(self, move |hash, client| client.get_block(hash))? {
+    pub fn next_block(
+        &mut self,
+    ) -> Result<Option<BlockEvent<Block<Checked>>>, bitcoincore_rpc::Error> {
+        if let Some((checkpoint, block)) = poll(self, move |hash, client| {
+            Ok(compat::block_from_032(
+                &client.get_block(&compat::blockhash_to_032(*hash))?,
+            ))
+        })? {
             // Stop tracking unconfirmed transactions that have been confirmed in this block.
-            for tx in &block.txdata {
+            for tx in block.transactions() {
                 self.mempool_snapshot.remove(&tx.compute_txid());
             }
             return Ok(Some(BlockEvent { block, checkpoint }));
@@ -271,7 +283,7 @@ enum PollResponse {
     BlockNotInBestChain,
     AgreementFound(bitcoincore_rpc_json::GetBlockResult, CheckPoint<BlockHash>),
     /// Force the genesis checkpoint down the receiver's throat.
-    AgreementPointNotFound(BlockHash),
+    AgreementPointNotFound(compat::bitcoin_032::BlockHash),
 }
 
 fn poll_once<C>(emitter: &Emitter<C>) -> Result<PollResponse, bitcoincore_rpc::Error>
@@ -306,7 +318,7 @@ where
     }
 
     for cp in emitter.last_cp.iter() {
-        let res = match client.get_block_info(&cp.hash()) {
+        let res = match client.get_block_info(&compat::blockhash_to_032(cp.hash())) {
             // block not in best chain
             Ok(res) if res.confirmations < 0 => continue,
             Ok(res) => res,
@@ -341,7 +353,7 @@ where
         match poll_once(emitter)? {
             PollResponse::Block(res) => {
                 let height = res.height as u32;
-                let hash = res.hash;
+                let hash = compat::blockhash_from_032(res.hash);
                 let item = get_item(&hash, &emitter.client)?;
 
                 let new_cp = emitter
@@ -375,7 +387,7 @@ where
                 continue;
             }
             PollResponse::AgreementPointNotFound(genesis_hash) => {
-                emitter.last_cp = CheckPoint::new(0, genesis_hash);
+                emitter.last_cp = CheckPoint::new(0, compat::blockhash_from_032(genesis_hash));
                 emitter.last_block = None;
                 continue;
             }
@@ -407,9 +419,10 @@ impl BitcoindRpcErrorExt for bitcoincore_rpc::Error {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test {
     use crate::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
+    use bdk_core::bitcoin::script::{ScriptPubKeyBufExt as _, WScriptHash};
+    use bdk_core::bitcoin::{Address, Amount, Network, ScriptPubKeyBuf, Txid};
     use bdk_chain::local_chain::LocalChain;
     use bdk_testenv::{anyhow, TestEnv};
-    use bitcoin::{hashes::Hash, Address, Amount, ScriptBuf, Txid, WScriptHash};
     use std::collections::HashSet;
 
     #[test]
@@ -428,13 +441,13 @@ mod test {
         env.mine_blocks(100, None)?;
         while emitter.next_block()?.is_some() {}
 
-        let spk_to_track = ScriptBuf::new_p2wsh(&WScriptHash::all_zeros());
-        let addr_to_track = Address::from_script(&spk_to_track, bitcoin::Network::Regtest)?;
+        let spk_to_track = ScriptPubKeyBuf::new_p2wsh(WScriptHash::from_byte_array([0; 32]));
+        let addr_to_track = Address::from_script(&spk_to_track, Network::Regtest)?;
         let mut mempool_txids = HashSet::new();
 
         // Send a tx at different heights and ensure txs are accumulating in expected_mempool_txids.
         for _ in 0..10 {
-            let sent_txid = env.send(&addr_to_track, Amount::from_sat(1_000))?;
+            let sent_txid = env.send(&addr_to_track, Amount::from_sat_u32(1_000))?;
             mempool_txids.insert(sent_txid);
             emitter.mempool()?;
             env.mine_blocks(1, None)?;
@@ -452,7 +465,7 @@ mod test {
         while let Some(block_event) = emitter.next_block()? {
             let confirmed_txids: HashSet<Txid> = block_event
                 .block
-                .txdata
+                .transactions()
                 .iter()
                 .map(|tx| tx.compute_txid())
                 .collect();

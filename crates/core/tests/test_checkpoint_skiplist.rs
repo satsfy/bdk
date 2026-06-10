@@ -26,7 +26,7 @@ fn expected_skip_index(i: u32) -> u32 {
 fn test_skiplist_indices() {
     // Build a chain spanning multiple log levels and assert that each node carries the pskip
     // pointer mandated by the formula.
-    let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+    let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
     assert_eq!(cp.index(), 0);
     assert!(cp.skip().is_none(), "genesis must not have a skip pointer");
 
@@ -62,7 +62,7 @@ fn test_skiplist_indices() {
 
 #[test]
 fn test_skiplist_insert_maintains_indices() {
-    let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+    let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
 
     // Build initial chain
     for height in [10, 20, 30, 40, 50] {
@@ -90,7 +90,7 @@ fn test_skiplist_insert_maintains_indices() {
 
 #[test]
 fn test_range_edge_cases() {
-    let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+    let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
 
     // Create sparse chain: 0, 100, 200, 300, 400, 500
     for i in 1..=5 {
@@ -140,7 +140,7 @@ fn test_range_edge_cases() {
 #[test]
 fn test_iter_overrides() {
     const N: u32 = 200;
-    let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+    let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
     for height in 1..=N {
         let hash = BlockHash::from_byte_array([(height % 256) as u8; 32]);
         cp = cp.push(height, hash).unwrap();
@@ -169,7 +169,7 @@ fn test_iter_overrides() {
 /// Build a sparse chain at the given heights (genesis at 0 is implicit; `heights` must be a
 /// strictly increasing sequence of positive heights).
 fn build_chain(heights: &[u32]) -> CheckPoint<BlockHash> {
-    let mut cp = CheckPoint::new(0, BlockHash::all_zeros());
+    let mut cp = CheckPoint::new(0, BlockHash::from_byte_array([0; 32]));
     for (i, &h) in heights.iter().enumerate() {
         let hash = BlockHash::from_byte_array([((i + 1) & 0xff) as u8; 32]);
         cp = cp.push(h, hash).unwrap();

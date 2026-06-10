@@ -10,7 +10,7 @@
 //! # use bdk_core::BlockId;
 //! # use bitcoin::hashes::Hash;
 //! # let tx_graph = TxGraph::<BlockId>::default();
-//! # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::all_zeros())].into_iter().collect()).unwrap();
+//! # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::from_byte_array([0; 32]))].into_iter().collect()).unwrap();
 //! # let chain_tip = chain.tip().block_id();
 //! let params = CanonicalizationParams::default();
 //! let view = CanonicalView::new(&tx_graph, &chain, chain_tip, params).unwrap();
@@ -28,7 +28,7 @@ use core::{fmt, ops::RangeBounds};
 use alloc::vec::Vec;
 
 use bdk_core::BlockId;
-use bitcoin::{Amount, OutPoint, ScriptBuf, Transaction, Txid};
+use bitcoin::{Amount, OutPoint, ScriptPubKeyBuf, Transaction, Txid};
 
 use crate::{
     spk_txout::SpkTxOutIndex, tx_graph::TxNode, Anchor, Balance, CanonicalIter, CanonicalReason,
@@ -149,7 +149,7 @@ impl<A: Anchor> CanonicalView<A> {
 
             if !tx.is_coinbase() {
                 view.spends
-                    .extend(tx.input.iter().map(|txin| (txin.previous_output, txid)));
+                    .extend(tx.inputs.iter().map(|txin| (txin.previous_output, txid)));
             }
 
             let pos = match why {
@@ -225,7 +225,7 @@ impl<A: Anchor> CanonicalView<A> {
     pub fn txout(&self, op: OutPoint) -> Option<FullTxOut<A>> {
         let (tx, pos) = self.txs.get(&op.txid)?;
         let vout: usize = op.vout.try_into().ok()?;
-        let txout = tx.output.get(vout)?;
+        let txout = tx.outputs.get(vout)?;
         let spent_by = self.spends.get(&op).map(|spent_by_txid| {
             let (_, spent_by_pos) = &self.txs[spent_by_txid];
             (spent_by_pos.clone(), *spent_by_txid)
@@ -251,7 +251,7 @@ impl<A: Anchor> CanonicalView<A> {
     /// # use bdk_core::BlockId;
     /// # use bitcoin::hashes::Hash;
     /// # let tx_graph = TxGraph::<BlockId>::default();
-    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::all_zeros())].into_iter().collect()).unwrap();
+    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::from_byte_array([0; 32]))].into_iter().collect()).unwrap();
     /// # let view = CanonicalView::new(&tx_graph, &chain, chain.tip().block_id(), Default::default()).unwrap();
     /// // Iterate over all canonical transactions
     /// for tx in view.txs() {
@@ -284,12 +284,12 @@ impl<A: Anchor> CanonicalView<A> {
     /// # use bdk_core::BlockId;
     /// # use bitcoin::hashes::Hash;
     /// # let tx_graph = TxGraph::<BlockId>::default();
-    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::all_zeros())].into_iter().collect()).unwrap();
+    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::from_byte_array([0; 32]))].into_iter().collect()).unwrap();
     /// # let view = CanonicalView::new(&tx_graph, &chain, chain.tip().block_id(), Default::default()).unwrap();
     /// # let indexer = KeychainTxOutIndex::<&str>::default();
     /// // Get all outputs from an indexer
     /// for (keychain, txout) in view.filter_outpoints(indexer.outpoints().clone()) {
-    ///     println!("{}: {} sats", keychain.0, txout.txout.value);
+    ///     println!("{}: {} sats", keychain.0, txout.txout.amount);
     /// }
     /// ```
     pub fn filter_outpoints<'v, O: Clone + 'v>(
@@ -313,12 +313,12 @@ impl<A: Anchor> CanonicalView<A> {
     /// # use bdk_core::BlockId;
     /// # use bitcoin::hashes::Hash;
     /// # let tx_graph = TxGraph::<BlockId>::default();
-    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::all_zeros())].into_iter().collect()).unwrap();
+    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::from_byte_array([0; 32]))].into_iter().collect()).unwrap();
     /// # let view = CanonicalView::new(&tx_graph, &chain, chain.tip().block_id(), Default::default()).unwrap();
     /// # let indexer = KeychainTxOutIndex::<&str>::default();
     /// // Get unspent outputs (UTXOs) from an indexer
     /// for (keychain, utxo) in view.filter_unspent_outpoints(indexer.outpoints().clone()) {
-    ///     println!("{} UTXO: {} sats", keychain.0, utxo.txout.value);
+    ///     println!("{} UTXO: {} sats", keychain.0, utxo.txout.amount);
     /// }
     /// ```
     pub fn filter_unspent_outpoints<'v, O: Clone + 'v>(
@@ -359,7 +359,7 @@ impl<A: Anchor> CanonicalView<A> {
     /// # use bdk_core::BlockId;
     /// # use bitcoin::hashes::Hash;
     /// # let tx_graph = TxGraph::<BlockId>::default();
-    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::all_zeros())].into_iter().collect()).unwrap();
+    /// # let chain = LocalChain::from_blocks([(0, bitcoin::BlockHash::from_byte_array([0; 32]))].into_iter().collect()).unwrap();
     /// # let view = CanonicalView::new(&tx_graph, &chain, chain.tip().block_id(), Default::default()).unwrap();
     /// # let indexer = KeychainTxOutIndex::<&str>::default();
     /// // Calculate balance with 6 confirmations, trusting all outputs
@@ -394,21 +394,21 @@ impl<A: Anchor> CanonicalView<A> {
                     if confirmations < min_confirmations {
                         // Not enough confirmations, treat as trusted/untrusted pending
                         if trust_predicate(&spk_i, &txout) {
-                            trusted_pending += txout.txout.value;
+                            trusted_pending = (trusted_pending + txout.txout.amount).expect("balance must not overflow");
                         } else {
-                            untrusted_pending += txout.txout.value;
+                            untrusted_pending = (untrusted_pending + txout.txout.amount).expect("balance must not overflow");
                         }
                     } else if txout.is_confirmed_and_spendable(self.tip.height) {
-                        confirmed += txout.txout.value;
+                        confirmed = (confirmed + txout.txout.amount).expect("balance must not overflow");
                     } else if !txout.is_mature(self.tip.height) {
-                        immature += txout.txout.value;
+                        immature = (immature + txout.txout.amount).expect("balance must not overflow");
                     }
                 }
                 ChainPosition::Unconfirmed { .. } => {
                     if trust_predicate(&spk_i, &txout) {
-                        trusted_pending += txout.txout.value;
+                        trusted_pending = (trusted_pending + txout.txout.amount).expect("balance must not overflow");
                     } else {
-                        untrusted_pending += txout.txout.value;
+                        untrusted_pending = (untrusted_pending + txout.txout.amount).expect("balance must not overflow");
                     }
                 }
             }
@@ -433,7 +433,7 @@ impl<A: Anchor> CanonicalView<A> {
         &'v self,
         indexer: &'v impl AsRef<SpkTxOutIndex<I>>,
         spk_index_range: impl RangeBounds<I> + 'v,
-    ) -> impl Iterator<Item = (ScriptBuf, Txid)> + 'v
+    ) -> impl Iterator<Item = (ScriptPubKeyBuf, Txid)> + 'v
     where
         I: fmt::Debug + Clone + Ord + 'v,
     {

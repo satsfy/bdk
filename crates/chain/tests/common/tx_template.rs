@@ -5,10 +5,13 @@ use rand::distributions::{Alphanumeric, DistString};
 use std::collections::HashMap;
 
 use bdk_chain::{spk_txout::SpkTxOutIndex, tx_graph::TxGraph, Anchor, CanonicalizationParams};
+use bdk_chain::compat;
+use bdk_testenv::utils::TestHash;
 use bitcoin::{
-    locktime::absolute::LockTime, secp256k1::Secp256k1, transaction, Amount, OutPoint, ScriptBuf,
+    locktime::absolute::LockTime, transaction, Amount, OutPoint, ScriptPubKeyBuf, ScriptSigBuf,
     Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
+use miniscript::bitcoin::secp256k1::Secp256k1;
 use miniscript::Descriptor;
 
 /// Template for creating a transaction in `TxGraph`.
@@ -71,10 +74,12 @@ pub fn init_graph<'a, A: Anchor + Clone + 'a>(
     (0..10).for_each(|index| {
         indexer.insert_spk(
             index,
-            descriptor
-                .at_derivation_index(index)
-                .unwrap()
-                .script_pubkey(),
+            compat::spk_from_ms(
+                descriptor
+                    .at_derivation_index(index)
+                    .unwrap()
+                    .script_pubkey(),
+            ),
         );
     });
     let mut txid_to_name = HashMap::<&'a str, Txid>::new();
@@ -82,28 +87,28 @@ pub fn init_graph<'a, A: Anchor + Clone + 'a>(
     let mut canonicalization_params = CanonicalizationParams::default();
     for (bogus_txin_vout, tx_tmp) in tx_templates.into_iter().enumerate() {
         let tx = Transaction {
-            version: transaction::Version::non_standard(0),
+            version: transaction::Version::maybe_non_standard(0),
             lock_time: LockTime::ZERO,
-            input: tx_tmp
+            inputs: tx_tmp
                 .inputs
                 .iter()
                 .map(|input| match input {
                     TxInTemplate::Bogus => TxIn {
-                        previous_output: OutPoint::new(
-                            bitcoin::hashes::Hash::hash(
+                        previous_output: OutPoint {
+                            txid: Txid::hash_data(
                                 Alphanumeric
                                     .sample_string(&mut rand::thread_rng(), 20)
                                     .as_bytes(),
                             ),
-                            bogus_txin_vout as u32,
-                        ),
-                        script_sig: ScriptBuf::new(),
+                            vout: bogus_txin_vout as u32,
+                        },
+                        script_sig: ScriptSigBuf::new(),
                         sequence: Sequence::default(),
                         witness: Witness::new(),
                     },
                     TxInTemplate::Coinbase => TxIn {
-                        previous_output: OutPoint::null(),
-                        script_sig: ScriptBuf::new(),
+                        previous_output: OutPoint::COINBASE_PREVOUT,
+                        script_sig: ScriptSigBuf::new(),
                         sequence: Sequence::MAX,
                         witness: Witness::new(),
                     },
@@ -112,24 +117,24 @@ pub fn init_graph<'a, A: Anchor + Clone + 'a>(
                             "txin template must spend from tx of template that comes before",
                         );
                         TxIn {
-                            previous_output: OutPoint::new(*prev_txid, *prev_vout as _),
-                            script_sig: ScriptBuf::new(),
+                            previous_output: OutPoint { txid: *prev_txid, vout: *prev_vout as _ },
+                            script_sig: ScriptSigBuf::new(),
                             sequence: Sequence::default(),
                             witness: Witness::new(),
                         }
                     }
                 })
                 .collect(),
-            output: tx_tmp
+            outputs: tx_tmp
                 .outputs
                 .iter()
                 .map(|output| match &output.spk_index {
                     None => TxOut {
-                        value: Amount::from_sat(output.value),
-                        script_pubkey: ScriptBuf::new(),
+                        amount: Amount::from_sat(output.value).expect("amount must be valid"),
+                        script_pubkey: ScriptPubKeyBuf::new(),
                     },
                     Some(index) => TxOut {
-                        value: Amount::from_sat(output.value),
+                        amount: Amount::from_sat(output.value).expect("amount must be valid"),
                         script_pubkey: indexer.spk_at_index(index).unwrap(),
                     },
                 })

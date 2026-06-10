@@ -4,10 +4,12 @@ use bdk_chain::{
     CanonicalizationParams, IndexedTxGraph,
 };
 use bdk_core::{BlockId, CheckPoint, ConfirmationBlockTime, TxUpdate};
+use bdk_chain::compat;
 use bitcoin::{
-    absolute, constants, hashes::Hash, key::Secp256k1, transaction, Amount, BlockHash, Network,
-    Transaction, TxIn, TxOut,
+    absolute, constants, transaction, Amount, BlockHash, Network, ScriptPubKeyBuf, Transaction,
+    TxIn, TxOut,
 };
+use miniscript::bitcoin::secp256k1::Secp256k1;
 use criterion::{criterion_group, criterion_main, Criterion};
 use miniscript::Descriptor;
 use std::sync::Arc;
@@ -20,14 +22,14 @@ const LOOKAHEAD: u32 = 10;
 const LAST_REVEALED: u32 = 500;
 const TX_CT: u32 = 21;
 const USE_SPK_CACHE: bool = true;
-const AMOUNT: Amount = Amount::from_sat(1_000);
+const AMOUNT: Amount = Amount::from_sat_u32(1_000);
 
 fn new_tx(lt: u32) -> Transaction {
     Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::from_consensus(lt),
-        input: vec![],
-        output: vec![TxOut::NULL],
+        inputs: vec![],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
     }
 }
 
@@ -41,7 +43,7 @@ fn genesis_block_id() -> BlockId {
 fn tip_block_id() -> BlockId {
     BlockId {
         height: 100,
-        hash: BlockHash::all_zeros(),
+        hash: BlockHash::from_byte_array([0; 32]),
     }
 }
 
@@ -87,7 +89,7 @@ fn do_bench(indexed_tx_graph: &KeychainTxGraph, chain: &LocalChain) {
     let bal = graph
         .canonical_view(chain, chain_tip, CanonicalizationParams::default())
         .balance(op, |_, _| false, 1);
-    assert_eq!(bal.total(), AMOUNT * TX_CT as u64);
+    assert_eq!(bal.total(), (AMOUNT * TX_CT as u64).expect("valid amount"));
 }
 
 pub fn reindex_tx_graph(c: &mut Criterion) {
@@ -96,10 +98,10 @@ pub fn reindex_tx_graph(c: &mut Criterion) {
         for i in 0..TX_CT {
             let script_pubkey = graph.index.reveal_next_spk(()).unwrap().0 .1;
             let tx = Transaction {
-                input: vec![TxIn::default()],
-                output: vec![TxOut {
+                inputs: vec![TxIn::EMPTY_COINBASE],
+                outputs: vec![TxOut {
                     script_pubkey,
-                    value: AMOUNT,
+                    amount: AMOUNT,
                 }],
                 ..new_tx(i)
             };

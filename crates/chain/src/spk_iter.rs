@@ -1,8 +1,10 @@
 use crate::{
-    bitcoin::{secp256k1::Secp256k1, ScriptBuf},
+    bitcoin::ScriptPubKeyBuf,
+    compat::{self, ms_bitcoin},
     miniscript::{Descriptor, DescriptorPublicKey},
     Indexed,
 };
+use ms_bitcoin::secp256k1::Secp256k1;
 use core::{borrow::Borrow, ops::Bound, ops::RangeBounds};
 
 /// Maximum [BIP32](https://bips.xyz/32) derivation index.
@@ -18,14 +20,14 @@ pub const BIP32_MAX_INDEX: u32 = (1 << 31) - 1;
 ///
 /// ```
 /// use bdk_chain::SpkIterator;
+/// # use bdk_chain::compat;
 /// # use miniscript::{Descriptor, DescriptorPublicKey};
-/// # use bitcoin::{secp256k1::Secp256k1};
 /// # use std::str::FromStr;
-/// # let secp = bitcoin::secp256k1::Secp256k1::signing_only();
+/// # let secp = bdk_chain::compat::ms_bitcoin::secp256k1::Secp256k1::signing_only();
 /// # let (descriptor, _) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "wpkh([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/1/0)").unwrap();
-/// # let external_spk_0 = descriptor.at_derivation_index(0).unwrap().script_pubkey();
-/// # let external_spk_3 = descriptor.at_derivation_index(3).unwrap().script_pubkey();
-/// # let external_spk_4 = descriptor.at_derivation_index(4).unwrap().script_pubkey();
+/// # let external_spk_0 = compat::spk_from_ms(descriptor.at_derivation_index(0).unwrap().script_pubkey());
+/// # let external_spk_3 = compat::spk_from_ms(descriptor.at_derivation_index(3).unwrap().script_pubkey());
+/// # let external_spk_4 = compat::spk_from_ms(descriptor.at_derivation_index(4).unwrap().script_pubkey());
 ///
 /// // Creates a new script pubkey iterator starting at 0 from a descriptor.
 /// let mut spk_iter = SpkIterator::new(&descriptor);
@@ -37,7 +39,7 @@ pub struct SpkIterator<D> {
     next_index: u32,
     end: u32,
     descriptor: D,
-    secp: Secp256k1<bitcoin::secp256k1::VerifyOnly>,
+    secp: Secp256k1<ms_bitcoin::secp256k1::VerifyOnly>,
 }
 
 impl<D> SpkIterator<D>
@@ -98,7 +100,7 @@ impl<D> Iterator for SpkIterator<D>
 where
     D: Borrow<Descriptor<DescriptorPublicKey>>,
 {
-    type Item = Indexed<ScriptBuf>;
+    type Item = Indexed<ScriptPubKeyBuf>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // For non-wildcard descriptors, we expect the first element to be Some((0, spk)), then None
@@ -112,12 +114,13 @@ where
             return None;
         }
 
-        let script = self
-            .descriptor
-            .borrow()
-            .derived_descriptor(&self.secp, self.next_index)
-            .expect("the descriptor cannot need hardened derivation")
-            .script_pubkey();
+        let script = compat::spk_from_ms(
+            self.descriptor
+                .borrow()
+                .derived_descriptor(&self.secp, self.next_index)
+                .expect("the descriptor cannot need hardened derivation")
+                .script_pubkey(),
+        );
         let output = (self.next_index, script);
 
         self.next_index += 1;
@@ -139,7 +142,7 @@ mod test {
     use core::ops::Bound;
 
     use crate::{
-        bitcoin::secp256k1::Secp256k1,
+        compat::ms_bitcoin::secp256k1::Secp256k1,
         indexer::keychain_txout::KeychainTxOutIndex,
         miniscript::{Descriptor, DescriptorPublicKey},
         spk_iter::{SpkIterator, BIP32_MAX_INDEX},
@@ -177,11 +180,11 @@ mod test {
     #[rustfmt::skip]
     fn test_spkiterator_wildcard() {
         let (_, external_desc, _) = init_txout_index();
-        let external_spk_0 = external_desc.at_derivation_index(0).unwrap().script_pubkey();
-        let external_spk_16 = external_desc.at_derivation_index(16).unwrap().script_pubkey();
-        let external_spk_20 = external_desc.at_derivation_index(20).unwrap().script_pubkey();
-        let external_spk_21 = external_desc.at_derivation_index(21).unwrap().script_pubkey();
-        let external_spk_max = external_desc.at_derivation_index(BIP32_MAX_INDEX).unwrap().script_pubkey();
+        let external_spk_0 = crate::compat::spk_from_ms(external_desc.at_derivation_index(0).unwrap().script_pubkey());
+        let external_spk_16 = crate::compat::spk_from_ms(external_desc.at_derivation_index(16).unwrap().script_pubkey());
+        let external_spk_20 = crate::compat::spk_from_ms(external_desc.at_derivation_index(20).unwrap().script_pubkey());
+        let external_spk_21 = crate::compat::spk_from_ms(external_desc.at_derivation_index(21).unwrap().script_pubkey());
+        let external_spk_max = crate::compat::spk_from_ms(external_desc.at_derivation_index(BIP32_MAX_INDEX).unwrap().script_pubkey());
 
         let mut external_spk = SpkIterator::new(&external_desc);
         let max_index = BIP32_MAX_INDEX - 22;
@@ -207,12 +210,14 @@ mod test {
     #[test]
     #[allow(clippy::iter_nth_zero)]
     fn test_spkiterator_non_wildcard() {
-        let secp = bitcoin::secp256k1::Secp256k1::signing_only();
+        let secp = Secp256k1::signing_only();
         let (no_wildcard_descriptor, _) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "wpkh([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/1/0)").unwrap();
-        let external_spk_0 = no_wildcard_descriptor
-            .at_derivation_index(0)
-            .unwrap()
-            .script_pubkey();
+        let external_spk_0 = crate::compat::spk_from_ms(
+            no_wildcard_descriptor
+                .at_derivation_index(0)
+                .unwrap()
+                .script_pubkey(),
+        );
 
         let mut external_spk = SpkIterator::new(&no_wildcard_descriptor);
 

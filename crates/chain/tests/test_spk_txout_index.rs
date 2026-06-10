@@ -1,14 +1,15 @@
 use bdk_chain::spk_txout::{CreatedTxOut, SpentTxOut};
 use bdk_chain::{spk_txout::SpkTxOutIndex, Indexer};
+use bitcoin::script::ScriptBufExt as _;
 use bitcoin::{
-    absolute, transaction, Amount, OutPoint, ScriptBuf, SignedAmount, Transaction, TxIn, TxOut,
+    absolute, transaction, Amount, OutPoint, ScriptPubKeyBuf, SignedAmount, Transaction, TxIn, TxOut,
 };
 use core::ops::Bound;
 
 #[test]
 fn spk_txout_sent_and_received() {
-    let spk1 = ScriptBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
-    let spk2 = ScriptBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
+    let spk1 = ScriptPubKeyBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
+    let spk2 = ScriptPubKeyBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
 
     let mut index = SpkTxOutIndex::default();
     index.insert_spk(0, spk1.clone());
@@ -17,74 +18,74 @@ fn spk_txout_sent_and_received() {
     let tx1 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(42_000),
             script_pubkey: spk1.clone(),
         }],
     };
 
     assert_eq!(
         index.sent_and_received(&tx1, ..),
-        (Amount::from_sat(0), Amount::from_sat(42_000))
+        (Amount::from_sat_u32(0), Amount::from_sat_u32(42_000))
     );
     assert_eq!(
         index.sent_and_received(&tx1, ..1),
-        (Amount::from_sat(0), Amount::from_sat(42_000))
+        (Amount::from_sat_u32(0), Amount::from_sat_u32(42_000))
     );
     assert_eq!(
         index.sent_and_received(&tx1, 1..),
-        (Amount::from_sat(0), Amount::from_sat(0))
+        (Amount::from_sat_u32(0), Amount::from_sat_u32(0))
     );
-    assert_eq!(index.net_value(&tx1, ..), SignedAmount::from_sat(42_000));
+    assert_eq!(index.net_value(&tx1, ..), SignedAmount::from_sat_i32(42_000));
     index.index_tx(&tx1);
     assert_eq!(
         index.sent_and_received(&tx1, ..),
-        (Amount::from_sat(0), Amount::from_sat(42_000)),
+        (Amount::from_sat_u32(0), Amount::from_sat_u32(42_000)),
         "shouldn't change after scanning"
     );
 
     let tx2 = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output: OutPoint {
                 txid: tx1.compute_txid(),
                 vout: 0,
             },
-            ..Default::default()
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![
+        outputs: vec![
             TxOut {
-                value: Amount::from_sat(20_000),
+                amount: Amount::from_sat_u32(20_000),
                 script_pubkey: spk2,
             },
             TxOut {
                 script_pubkey: spk1,
-                value: Amount::from_sat(30_000),
+                amount: Amount::from_sat_u32(30_000),
             },
         ],
     };
 
     assert_eq!(
         index.sent_and_received(&tx2, ..),
-        (Amount::from_sat(42_000), Amount::from_sat(50_000))
+        (Amount::from_sat_u32(42_000), Amount::from_sat_u32(50_000))
     );
     assert_eq!(
         index.sent_and_received(&tx2, ..1),
-        (Amount::from_sat(42_000), Amount::from_sat(30_000))
+        (Amount::from_sat_u32(42_000), Amount::from_sat_u32(30_000))
     );
     assert_eq!(
         index.sent_and_received(&tx2, 1..),
-        (Amount::from_sat(0), Amount::from_sat(20_000))
+        (Amount::from_sat_u32(0), Amount::from_sat_u32(20_000))
     );
-    assert_eq!(index.net_value(&tx2, ..), SignedAmount::from_sat(8_000));
+    assert_eq!(index.net_value(&tx2, ..), SignedAmount::from_sat_i32(8_000));
 }
 
 #[test]
 fn spk_txout_spent_created_txouts() {
-    let spk0 = ScriptBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
-    let spk1 = ScriptBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
+    let spk0 = ScriptPubKeyBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
+    let spk1 = ScriptPubKeyBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
 
     let mut index = SpkTxOutIndex::default();
     index.insert_spk(0, spk0.clone());
@@ -93,9 +94,9 @@ fn spk_txout_spent_created_txouts() {
     let tx1 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(42_000),
             script_pubkey: spk0.clone(),
         }],
     };
@@ -113,7 +114,7 @@ fn spk_txout_spent_created_txouts() {
                 vout: 0,
             },
             txout: TxOut {
-                value: Amount::from_sat(42_000),
+                amount: Amount::from_sat_u32(42_000),
                 script_pubkey: spk0.clone(),
             },
             spk_index: 0,
@@ -123,21 +124,21 @@ fn spk_txout_spent_created_txouts() {
     let tx2 = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
+        inputs: vec![TxIn {
             previous_output: OutPoint {
                 txid: tx1.compute_txid(),
                 vout: 0,
             },
-            ..Default::default()
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![
+        outputs: vec![
             TxOut {
-                value: Amount::from_sat(20_000),
+                amount: Amount::from_sat_u32(20_000),
                 script_pubkey: spk1.clone(),
             },
             TxOut {
                 script_pubkey: spk0.clone(),
-                value: Amount::from_sat(30_000),
+                amount: Amount::from_sat_u32(30_000),
             },
         ],
     };
@@ -149,7 +150,7 @@ fn spk_txout_spent_created_txouts() {
         spent_txouts[0],
         SpentTxOut {
             txout: TxOut {
-                value: Amount::from_sat(42_000),
+                amount: Amount::from_sat_u32(42_000),
                 script_pubkey: spk0.clone(),
             },
             spending_input: TxIn {
@@ -157,7 +158,7 @@ fn spk_txout_spent_created_txouts() {
                     txid: tx1.compute_txid(),
                     vout: 0,
                 },
-                ..Default::default()
+                ..TxIn::EMPTY_COINBASE
             },
             spending_input_index: 0,
             spk_index: 0,
@@ -174,7 +175,7 @@ fn spk_txout_spent_created_txouts() {
                 vout: 0,
             },
             txout: TxOut {
-                value: Amount::from_sat(20_000),
+                amount: Amount::from_sat_u32(20_000),
                 script_pubkey: spk1.clone(),
             },
             spk_index: 1,
@@ -188,7 +189,7 @@ fn spk_txout_spent_created_txouts() {
                 vout: 1,
             },
             txout: TxOut {
-                value: Amount::from_sat(30_000),
+                amount: Amount::from_sat_u32(30_000),
                 script_pubkey: spk0.clone(),
             },
             spk_index: 0,
@@ -198,8 +199,8 @@ fn spk_txout_spent_created_txouts() {
 
 #[test]
 fn mark_used() {
-    let spk1 = ScriptBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
-    let spk2 = ScriptBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
+    let spk1 = ScriptPubKeyBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
+    let spk2 = ScriptPubKeyBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
 
     let mut spk_index = SpkTxOutIndex::default();
     spk_index.insert_spk(1, spk1.clone());
@@ -216,9 +217,9 @@ fn mark_used() {
     let tx1 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(42_000),
             script_pubkey: spk1,
         }],
     };
@@ -242,11 +243,11 @@ fn unmark_used_does_not_result_in_invalid_representation() {
 
 #[test]
 fn outputs_in_range_excluded_bounds() {
-    let spk1 = ScriptBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
-    let spk2 = ScriptBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
-    let spk3 = ScriptBuf::from_hex("0014afa973f4364b2772d35f7a13ed83eb0c3330cf9c").unwrap();
-    let spk4 = ScriptBuf::from_hex("00140707d2493460cad9bb20f5f447a5a89d16d9e21c").unwrap();
-    let spk5 = ScriptBuf::from_hex("0014a10d9257489e685dda030662390dc177852faf13").unwrap();
+    let spk1 = ScriptPubKeyBuf::from_hex("001404f1e52ce2bab3423c6a8c63b7cd730d8f12542c").unwrap();
+    let spk2 = ScriptPubKeyBuf::from_hex("00142b57404ae14f08c3a0c903feb2af7830605eb00f").unwrap();
+    let spk3 = ScriptPubKeyBuf::from_hex("0014afa973f4364b2772d35f7a13ed83eb0c3330cf9c").unwrap();
+    let spk4 = ScriptPubKeyBuf::from_hex("00140707d2493460cad9bb20f5f447a5a89d16d9e21c").unwrap();
+    let spk5 = ScriptPubKeyBuf::from_hex("0014a10d9257489e685dda030662390dc177852faf13").unwrap();
 
     let mut spk_index = SpkTxOutIndex::default();
     spk_index.insert_spk(1, spk1.clone());
@@ -258,9 +259,9 @@ fn outputs_in_range_excluded_bounds() {
     let tx1 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(10_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(10_000),
             script_pubkey: spk1,
         }],
     };
@@ -268,9 +269,9 @@ fn outputs_in_range_excluded_bounds() {
     let tx2 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(20_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(20_000),
             script_pubkey: spk2,
         }],
     };
@@ -278,9 +279,9 @@ fn outputs_in_range_excluded_bounds() {
     let tx3 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(30_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(30_000),
             script_pubkey: spk3,
         }],
     };
@@ -288,9 +289,9 @@ fn outputs_in_range_excluded_bounds() {
     let tx4 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(40_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(40_000),
             script_pubkey: spk4,
         }],
     };
@@ -298,9 +299,9 @@ fn outputs_in_range_excluded_bounds() {
     let tx5 = Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            value: Amount::from_sat(50_000),
+        inputs: vec![],
+        outputs: vec![TxOut {
+            amount: Amount::from_sat_u32(50_000),
             script_pubkey: spk5,
         }],
     };

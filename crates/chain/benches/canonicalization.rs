@@ -3,10 +3,12 @@ use bdk_chain::{keychain_txout::KeychainTxOutIndex, local_chain::LocalChain, Ind
 use bdk_core::{BlockId, CheckPoint};
 use bdk_core::{ConfirmationBlockTime, TxUpdate};
 use bdk_testenv::hash;
+use bdk_chain::compat;
 use bitcoin::{
-    absolute, constants, hashes::Hash, key::Secp256k1, transaction, Amount, BlockHash, Network,
-    OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
+    absolute, constants, transaction, Amount, BlockHash, Network, OutPoint, ScriptPubKeyBuf,
+    Transaction, TxIn, TxOut,
 };
+use miniscript::bitcoin::secp256k1::Secp256k1;
 use criterion::{criterion_group, criterion_main, Criterion};
 use miniscript::{Descriptor, DescriptorPublicKey};
 use std::sync::Arc;
@@ -19,18 +21,20 @@ fn new_tx(lt: u32) -> Transaction {
     Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::from_consensus(lt),
-        input: vec![],
-        output: vec![TxOut::NULL],
+        inputs: vec![],
+        outputs: vec![TxOut { amount: Amount::ZERO, script_pubkey: ScriptPubKeyBuf::new() }],
     }
 }
 
-fn spk_at_index(txout_index: &KeychainTxOutIndex<Keychain>, index: u32) -> ScriptBuf {
-    txout_index
-        .get_descriptor(())
-        .unwrap()
-        .at_derivation_index(index)
-        .unwrap()
-        .script_pubkey()
+fn spk_at_index(txout_index: &KeychainTxOutIndex<Keychain>, index: u32) -> ScriptPubKeyBuf {
+    compat::spk_from_ms(
+        txout_index
+            .get_descriptor(())
+            .unwrap()
+            .at_derivation_index(index)
+            .unwrap()
+            .script_pubkey(),
+    )
 }
 
 fn genesis_block_id() -> BlockId {
@@ -43,7 +47,7 @@ fn genesis_block_id() -> BlockId {
 fn tip_block_id() -> BlockId {
     BlockId {
         height: 100,
-        hash: BlockHash::all_zeros(),
+        hash: BlockHash::from_byte_array([0; 32]),
     }
 }
 
@@ -52,12 +56,12 @@ fn tip_block_id() -> BlockId {
 fn add_ancestor_tx(graph: &mut KeychainTxGraph, block_id: BlockId, locktime: u32) -> OutPoint {
     let spk_0 = spk_at_index(&graph.index, 0);
     let tx = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint::new(hash!("bogus"), locktime),
-            ..Default::default()
+        inputs: vec![TxIn {
+            previous_output: OutPoint { txid: hash!("bogus"), vout: locktime },
+            ..TxIn::EMPTY_COINBASE
         }],
-        output: vec![TxOut {
-            value: Amount::ONE_BTC,
+        outputs: vec![TxOut {
+            amount: Amount::ONE_BTC,
             script_pubkey: spk_0,
         }],
         ..new_tx(locktime)
@@ -132,12 +136,13 @@ pub fn many_conflicting_unconfirmed(c: &mut Criterion) {
         let spk_1 = spk_at_index(&tx_graph.index, 1);
         for i in 1..=CONFLICTING_TX_COUNT {
             let tx = Transaction {
-                input: vec![TxIn {
+                inputs: vec![TxIn {
                     previous_output,
-                    ..Default::default()
+                    ..TxIn::EMPTY_COINBASE
                 }],
-                output: vec![TxOut {
-                    value: Amount::ONE_BTC - Amount::from_sat(i as u64 * 10),
+                outputs: vec![TxOut {
+                    amount: (Amount::ONE_BTC - Amount::from_sat(i as u64 * 10).expect("valid amount"))
+                        .expect("must not underflow"),
                     script_pubkey: spk_1.clone(),
                 }],
                 ..new_tx(i)
@@ -171,9 +176,9 @@ pub fn many_chained_unconfirmed(c: &mut Criterion) {
         for i in 0..TX_CHAIN_COUNT {
             // Create tx.
             let tx = Transaction {
-                input: vec![TxIn {
+                inputs: vec![TxIn {
                     previous_output,
-                    ..Default::default()
+                    ..TxIn::EMPTY_COINBASE
                 }],
                 ..new_tx(i)
             };
@@ -183,7 +188,7 @@ pub fn many_chained_unconfirmed(c: &mut Criterion) {
             update.txs = vec![Arc::new(tx)];
             let _ = tx_graph.apply_update(update);
             // Store the next prevout.
-            previous_output = OutPoint::new(txid, 0);
+            previous_output = OutPoint { txid: txid, vout: 0 };
         }
     }));
     c.bench_function("many_chained_unconfirmed::list_canonical_txs", {
@@ -214,21 +219,23 @@ pub fn nested_conflicts(c: &mut Criterion) {
                         last_seen /= 2;
                     }
                     let ((_, script_pubkey), _) = tx_graph.index.next_unused_spk(()).unwrap();
-                    let value =
-                        Amount::ONE_BTC - Amount::from_sat(depth as u64 * 200 - conflict_i as u64);
+                    let value = (Amount::ONE_BTC
+                        - Amount::from_sat(depth as u64 * 200 - conflict_i as u64)
+                            .expect("valid amount"))
+                    .expect("must not underflow");
                     let tx = Transaction {
-                        input: vec![TxIn {
+                        inputs: vec![TxIn {
                             previous_output,
-                            ..Default::default()
+                            ..TxIn::EMPTY_COINBASE
                         }],
-                        output: vec![TxOut {
-                            value,
+                        outputs: vec![TxOut {
+                            amount: value,
                             script_pubkey,
                         }],
                         ..new_tx(conflict_i as _)
                     };
                     let txid = tx.compute_txid();
-                    prev_ops.push(OutPoint::new(txid, 0));
+                    prev_ops.push(OutPoint { txid: txid, vout: 0 });
                     let _ = tx_graph.insert_seen_at(txid, last_seen as _);
                     let _ = tx_graph.insert_tx(tx);
                 }

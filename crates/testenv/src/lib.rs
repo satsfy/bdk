@@ -1,15 +1,13 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
+pub mod compat;
 pub mod utils;
 
 use anyhow::Context;
-use bdk_chain::bitcoin::{
-    block::Header, hash_types::TxMerkleNode, hex::FromHex, script::PushBytesBuf, transaction,
-    Address, Amount, Block, BlockHash, ScriptBuf, Transaction, TxIn, TxOut, Txid,
-};
+use bdk_chain::bitcoin::{Address, Amount, BlockHash, ScriptPubKeyBuf, Txid};
 use bdk_chain::CheckPoint;
 use bitcoin::address::NetworkChecked;
-use bitcoin::hex::HexToBytesError;
+use compat::bitcoin_032;
 use core::time::Duration;
 use electrsd::bitcoind::mtype::GetBlockTemplate;
 use electrsd::bitcoind::{TemplateRequest, TemplateRules};
@@ -61,18 +59,18 @@ pub struct MineParams {
     /// Set a custom block timestamp. Defaults to `max(min_time, now)`.
     pub time: Option<u32>,
     /// Set a custom coinbase output script. Defaults to `OP_TRUE`.
-    pub coinbase_address: Option<ScriptBuf>,
+    pub coinbase_address: Option<ScriptPubKeyBuf>,
 }
 
 impl MineParams {
-    fn address_or_anyone_can_spend(&self) -> ScriptBuf {
-        use bdk_chain::bitcoin::opcodes::OP_TRUE;
+    fn address_or_anyone_can_spend(&self) -> bitcoin_032::ScriptBuf {
         self.coinbase_address
             .clone()
+            .map(compat::spk_to_032)
             // OP_TRUE (anyone can spend)
             .unwrap_or_else(|| {
-                bdk_chain::bitcoin::script::Builder::new()
-                    .push_opcode(OP_TRUE)
+                bitcoin_032::script::Builder::new()
+                    .push_opcode(bitcoin_032::opcodes::OP_TRUE)
                     .into_script()
             })
     }
@@ -140,7 +138,7 @@ impl TestEnv {
         address: Option<Address>,
     ) -> anyhow::Result<Vec<BlockHash>> {
         let coinbase_address = match address {
-            Some(address) => address,
+            Some(address) => compat::address_to_032(&address),
             None => self.bitcoind.client.new_address()?,
         };
         let block_hashes = self
@@ -148,7 +146,10 @@ impl TestEnv {
             .client
             .generate_to_address(count as _, &coinbase_address)?
             .into_model()?
-            .0;
+            .0
+            .into_iter()
+            .map(compat::blockhash_from_032)
+            .collect();
         Ok(block_hashes)
     }
 
@@ -177,7 +178,13 @@ impl TestEnv {
     }
 
     /// Mine a single block with the given [`MineParams`].
+    ///
+    /// The block is constructed with the `bitcoin 0.32` types used by the RPC client; only the
+    /// returned [`BlockHash`] crosses back into bdk's `bitcoin` version.
     pub fn mine_block(&self, params: MineParams) -> anyhow::Result<(usize, BlockHash)> {
+        use bitcoin_032::hashes::Hash as _;
+        use bitcoin_032::hex::FromHex as _;
+
         let bt = self.get_block_template()?;
 
         // BIP34 requires the height to be the first item in coinbase scriptSig.
@@ -185,21 +192,22 @@ impl TestEnv {
         // encoding (using minimal opcodes like OP_1 for height 1).
         // The scriptSig must also be 2-100 bytes total.
         let coinbase_scriptsig = {
-            let mut builder = bdk_chain::bitcoin::script::Builder::new().push_int(bt.height as i64);
+            let mut builder = bitcoin_032::script::Builder::new().push_int(bt.height as i64);
             for v in bt.coinbase_aux.values() {
                 let bytes = Vec::<u8>::from_hex(v).expect("must be valid hex");
-                let bytes_buf = PushBytesBuf::try_from(bytes).expect("must be valid bytes");
+                let bytes_buf =
+                    bitcoin_032::script::PushBytesBuf::try_from(bytes).expect("must be valid bytes");
                 builder = builder.push_slice(bytes_buf);
             }
             // Ensure scriptSig is at least 2 bytes (pad with OP_0 if needed)
             if builder.as_bytes().len() < 2 {
-                builder = builder.push_opcode(bdk_chain::bitcoin::opcodes::OP_0);
+                builder = builder.push_opcode(bitcoin_032::opcodes::OP_0);
             }
             builder.into_script()
         };
 
         let coinbase_outputs = if params.empty {
-            let tx_fees: Amount = bt
+            let tx_fees: bitcoin_032::Amount = bt
                 .transactions
                 .iter()
                 .map(|tx| tx.fee.to_unsigned().expect("fee must be positive"))
@@ -209,12 +217,12 @@ impl TestEnv {
                 .to_unsigned()
                 .expect("coinbase_value must be positive")
                 - tx_fees;
-            vec![TxOut {
+            vec![bitcoin_032::TxOut {
                 value,
                 script_pubkey: params.address_or_anyone_can_spend(),
             }]
         } else {
-            core::iter::once(TxOut {
+            core::iter::once(bitcoin_032::TxOut {
                 value: bt
                     .coinbase_value
                     .to_unsigned()
@@ -224,10 +232,10 @@ impl TestEnv {
             .chain(
                 bt.default_witness_commitment
                     .as_ref()
-                    .map(|s| -> Result<_, HexToBytesError> {
-                        Ok(TxOut {
-                            value: Amount::ZERO,
-                            script_pubkey: ScriptBuf::from_hex(s)?,
+                    .map(|s| -> Result<_, bitcoin_032::hex::HexToBytesError> {
+                        Ok(bitcoin_032::TxOut {
+                            value: bitcoin_032::Amount::ZERO,
+                            script_pubkey: bitcoin_032::ScriptBuf::from_hex(s)?,
                         })
                     })
                     .transpose()?,
@@ -235,14 +243,14 @@ impl TestEnv {
             .collect()
         };
 
-        let coinbase_tx = Transaction {
-            version: transaction::Version::ONE,
-            lock_time: bdk_chain::bitcoin::absolute::LockTime::from_height(0)?,
-            input: vec![TxIn {
-                previous_output: bdk_chain::bitcoin::OutPoint::default(),
+        let coinbase_tx = bitcoin_032::Transaction {
+            version: bitcoin_032::transaction::Version::ONE,
+            lock_time: bitcoin_032::absolute::LockTime::from_height(0)?,
+            input: vec![bitcoin_032::TxIn {
+                previous_output: bitcoin_032::OutPoint::default(),
                 script_sig: coinbase_scriptsig,
-                sequence: bdk_chain::bitcoin::Sequence::default(),
-                witness: bdk_chain::bitcoin::Witness::new(),
+                sequence: bitcoin_032::Sequence::default(),
+                witness: bitcoin_032::Witness::new(),
             }],
             output: coinbase_outputs,
         };
@@ -255,12 +263,12 @@ impl TestEnv {
                 .collect()
         };
 
-        let mut block = Block {
-            header: Header {
+        let mut block = bitcoin_032::Block {
+            header: bitcoin_032::block::Header {
                 version: bt.version,
                 prev_blockhash: bt.previous_block_hash,
-                merkle_root: TxMerkleNode::from_raw_hash(
-                    bdk_chain::bitcoin::merkle_tree::calculate_root(
+                merkle_root: bitcoin_032::TxMerkleNode::from_raw_hash(
+                    bitcoin_032::merkle_tree::calculate_root(
                         txdata.iter().map(|tx| tx.compute_txid().to_raw_hash()),
                     )
                     .expect("must have atleast one tx"),
@@ -284,7 +292,7 @@ impl TestEnv {
             let blockhash = block.block_hash();
             if target.is_met_by(blockhash) {
                 self.rpc_client().submit_block(&block)?;
-                return Ok((bt.height as usize, blockhash));
+                return Ok((bt.height as usize, compat::blockhash_from_032(blockhash)));
             }
         }
 
@@ -324,6 +332,7 @@ impl TestEnv {
         let delay = Duration::from_millis(200);
         let start = std::time::Instant::now();
 
+        let txid = compat::txid_to_032(txid);
         while start.elapsed() < timeout {
             if self.electrsd.client.transaction_get(&txid).is_ok() {
                 return Ok(());
@@ -394,9 +403,12 @@ impl TestEnv {
         let txid = self
             .bitcoind
             .client
-            .send_to_address(address, amount)?
+            .send_to_address(
+                &compat::address_to_032(address),
+                compat::amount_to_032(amount),
+            )?
             .txid()?;
-        Ok(txid)
+        Ok(compat::txid_from_032(txid))
     }
 
     /// Create a checkpoint linked list of all the blocks in the chain.
@@ -412,20 +424,22 @@ impl TestEnv {
     /// Get the genesis hash of the blockchain.
     pub fn genesis_hash(&self) -> anyhow::Result<BlockHash> {
         let hash = self.bitcoind.client.get_block_hash(0)?.into_model()?.0;
-        Ok(hash)
+        Ok(compat::blockhash_from_032(hash))
     }
 
     /// Get block hash by `height` from the `bitcoind` client.
     pub fn get_block_hash(&self, height: u64) -> anyhow::Result<BlockHash> {
-        Ok(self.bitcoind.client.get_block_hash(height)?.block_hash()?)
+        Ok(compat::blockhash_from_032(
+            self.bitcoind.client.get_block_hash(height)?.block_hash()?,
+        ))
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test {
+    use crate::compat::{self, bitcoin_032};
     use crate::{MineParams, TestEnv};
-    use bdk_chain::bitcoin::opcodes::OP_TRUE;
     use bdk_chain::bitcoin::Amount;
     use core::time::Duration;
     use electrsd::bitcoind::anyhow::Result;
@@ -467,18 +481,19 @@ mod test {
 
     #[test]
     fn test_mine_block() -> Result<()> {
-        let anyone_can_spend = bdk_chain::bitcoin::script::Builder::new()
-            .push_opcode(OP_TRUE)
+        let anyone_can_spend = bitcoin_032::script::Builder::new()
+            .push_opcode(bitcoin_032::opcodes::OP_TRUE)
             .into_script();
 
         let env = TestEnv::new()?;
 
         // So we can spend.
-        let addr = env
-            .rpc_client()
-            .get_new_address(None, None)?
-            .address()?
-            .assume_checked();
+        let addr = compat::address_from_032(
+            &env.rpc_client()
+                .get_new_address(None, None)?
+                .address()?
+                .assume_checked(),
+        );
         env.mine_blocks(100, Some(addr.clone()))?;
 
         // Try mining a block with custom time.
@@ -488,7 +503,9 @@ mod test {
             time: Some(custom_time),
             coinbase_address: None,
         })?;
-        let a_block = env.rpc_client().get_block(a_hash)?;
+        let a_block = env
+            .rpc_client()
+            .get_block(compat::blockhash_to_032(a_hash))?;
         assert_eq!(a_block.header.time, custom_time);
         assert_eq!(
             a_block.txdata[0].output[0].script_pubkey, anyone_can_spend,
@@ -496,16 +513,18 @@ mod test {
         );
 
         // Now try mining with min time & some txs.
-        let txid1 = env.send(&addr, Amount::from_sat(100_000))?;
-        let txid2 = env.send(&addr, Amount::from_sat(200_000))?;
-        let txid3 = env.send(&addr, Amount::from_sat(300_000))?;
+        let txid1 = env.send(&addr, Amount::from_sat_u32(100_000))?;
+        let txid2 = env.send(&addr, Amount::from_sat_u32(200_000))?;
+        let txid3 = env.send(&addr, Amount::from_sat_u32(300_000))?;
         let min_time = env.get_block_template()?.min_time;
         let (_b_height, b_hash) = env.mine_block(MineParams {
             empty: false,
             time: Some(min_time),
             coinbase_address: None,
         })?;
-        let b_block = env.rpc_client().get_block(b_hash)?;
+        let b_block = env
+            .rpc_client()
+            .get_block(compat::blockhash_to_032(b_hash))?;
         assert_eq!(b_block.header.time, min_time);
         assert_eq!(
             a_block.txdata[0].output[0].script_pubkey, anyone_can_spend,
@@ -516,7 +535,7 @@ mod test {
                 .txdata
                 .iter()
                 .skip(1) // ignore coinbase
-                .map(|tx| tx.compute_txid())
+                .map(|tx| compat::txid_from_032(tx.compute_txid()))
                 .collect::<BTreeSet<_>>(),
             [txid1, txid2, txid3].into_iter().collect(),
             "Must have all txs"
@@ -528,10 +547,12 @@ mod test {
             time: None,
             coinbase_address: Some(addr.script_pubkey()),
         })?;
-        let c_block = env.rpc_client().get_block(c_hash)?;
+        let c_block = env
+            .rpc_client()
+            .get_block(compat::blockhash_to_032(c_hash))?;
         assert_eq!(
             c_block.txdata[0].output[0].script_pubkey,
-            addr.script_pubkey(),
+            compat::spk_to_032(addr.script_pubkey()),
             "Custom address works"
         );
 

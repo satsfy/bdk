@@ -19,13 +19,12 @@ use crate::{BlockId, ConfirmationBlockTime};
 /// # use bdk_chain::BlockId;
 /// # use bdk_chain::ConfirmationBlockTime;
 /// # use bdk_chain::example_utils::*;
-/// # use bitcoin::hashes::Hash;
 /// # use bitcoin::BlockHash;
 /// // Initialize the local chain with two blocks.
 /// let chain = LocalChain::<BlockHash>::from_blocks(
 ///     [
-///         (1, Hash::hash("first".as_bytes())),
-///         (2, Hash::hash("second".as_bytes())),
+///         (1, new_hash::<BlockHash>("first")),
+///         (2, new_hash::<BlockHash>("second")),
 ///     ]
 ///     .into_iter()
 ///     .collect(),
@@ -43,7 +42,7 @@ use crate::{BlockId, ConfirmationBlockTime};
 ///     tx.compute_txid(),
 ///     BlockId {
 ///         height: 1,
-///         hash: Hash::hash("first".as_bytes()),
+///         hash: new_hash::<BlockHash>("first"),
 ///     },
 /// );
 ///
@@ -58,7 +57,7 @@ use crate::{BlockId, ConfirmationBlockTime};
 ///     ConfirmationBlockTime {
 ///         block_id: BlockId {
 ///             height: 2,
-///             hash: Hash::hash("third".as_bytes()),
+///             hash: new_hash::<BlockHash>("third"),
 ///         },
 ///         confirmation_time: 123,
 ///     },
@@ -110,7 +109,7 @@ impl Anchor for ConfirmationBlockTime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TxPosInBlock<'b> {
     /// Block in which the transaction appeared.
-    pub block: &'b bitcoin::Block,
+    pub block: &'b bitcoin::Block<bitcoin::block::Checked>,
     /// Block's [`BlockId`].
     pub block_id: BlockId,
     /// Position in the block on which the transaction appeared.
@@ -127,7 +126,7 @@ impl From<TxPosInBlock<'_>> for ConfirmationBlockTime {
     fn from(pos: TxPosInBlock) -> Self {
         Self {
             block_id: pos.block_id,
-            confirmation_time: pos.block.header.time as _,
+            confirmation_time: pos.block.header().time.to_u32() as _,
         }
     }
 }

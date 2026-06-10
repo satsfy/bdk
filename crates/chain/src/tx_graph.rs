@@ -297,14 +297,14 @@ impl<A> TxGraph<A> {
         self.txs.iter().flat_map(|(txid, tx)| match tx {
             TxNodeInternal::Whole(tx) => tx
                 .as_ref()
-                .output
+                .outputs
                 .iter()
                 .enumerate()
-                .map(|(vout, txout)| (OutPoint::new(*txid, vout as _), txout))
+                .map(|(vout, txout)| (OutPoint { txid: *txid, vout: vout as _ }, txout))
                 .collect::<Vec<_>>(),
             TxNodeInternal::Partial(txouts) => txouts
                 .iter()
-                .map(|(vout, txout)| (OutPoint::new(*txid, *vout as _), txout))
+                .map(|(vout, txout)| (OutPoint { txid: *txid, vout: *vout as _ }, txout))
                 .collect::<Vec<_>>(),
         })
     }
@@ -321,7 +321,7 @@ impl<A> TxGraph<A> {
                 TxNodeInternal::Partial(txouts) => Some(
                     txouts
                         .iter()
-                        .map(|(&vout, txout)| (OutPoint::new(*txid, vout), txout)),
+                        .map(|(&vout, txout)| (OutPoint { txid: *txid, vout: vout }, txout)),
                 ),
             })
             .flatten()
@@ -382,7 +382,7 @@ impl<A> TxGraph<A> {
     /// Obtains a single tx output (if any) at the specified outpoint.
     pub fn get_txout(&self, outpoint: OutPoint) -> Option<&TxOut> {
         match &self.txs.get(&outpoint.txid)? {
-            TxNodeInternal::Whole(tx) => tx.as_ref().output.get(outpoint.vout as usize),
+            TxNodeInternal::Whole(tx) => tx.as_ref().outputs.get(outpoint.vout as usize),
             TxNodeInternal::Partial(txouts) => txouts.get(&outpoint.vout),
         }
     }
@@ -394,7 +394,7 @@ impl<A> TxGraph<A> {
         Some(match &self.txs.get(&txid)? {
             TxNodeInternal::Whole(tx) => tx
                 .as_ref()
-                .output
+                .outputs
                 .iter()
                 .enumerate()
                 .map(|(vout, txout)| (vout as u32, txout))
@@ -422,7 +422,7 @@ impl<A> TxGraph<A> {
             return Ok(Amount::ZERO);
         }
 
-        let (inputs_sum, missing_outputs) = tx.input.iter().fold(
+        let (inputs_sum, missing_outputs) = tx.inputs.iter().fold(
             (SignedAmount::ZERO, Vec::new()),
             |(mut sum, mut missing_outpoints), txin| match self.get_txout(txin.previous_output) {
                 None => {
@@ -430,7 +430,7 @@ impl<A> TxGraph<A> {
                     (sum, missing_outpoints)
                 }
                 Some(txout) => {
-                    sum += txout.value.to_signed().expect("valid `SignedAmount`");
+                    sum = (sum + txout.amount.to_signed()).expect("input sum must not overflow");
                     (sum, missing_outpoints)
                 }
             },
@@ -440,12 +440,13 @@ impl<A> TxGraph<A> {
         }
 
         let outputs_sum = tx
-            .output
+            .outputs
             .iter()
-            .map(|txout| txout.value.to_signed().expect("valid `SignedAmount`"))
-            .sum::<SignedAmount>();
+            .fold(SignedAmount::ZERO, |sum, txout| {
+                (sum + txout.amount.to_signed()).expect("output sum must not overflow")
+            });
 
-        let fee = inputs_sum - outputs_sum;
+        let fee = (inputs_sum - outputs_sum).expect("fee must not overflow");
         fee.to_unsigned()
             .map_err(|_| CalculateFeeError::NegativeFee(fee))
     }
@@ -468,8 +469,8 @@ impl<A> TxGraph<A> {
         &self,
         txid: Txid,
     ) -> impl DoubleEndedIterator<Item = (u32, &HashSet<Txid>)> + '_ {
-        let start = OutPoint::new(txid, 0);
-        let end = OutPoint::new(txid, u32::MAX);
+        let start = OutPoint { txid: txid, vout: 0 };
+        let end = OutPoint { txid: txid, vout: u32::MAX };
         self.spends
             .range(start..=end)
             .map(|(outpoint, spends)| (outpoint.vout, spends))
@@ -549,7 +550,7 @@ impl<A> TxGraph<A> {
         tx: &'g Transaction,
     ) -> impl Iterator<Item = (usize, Txid)> + 'g {
         let txid = tx.compute_txid();
-        tx.input
+        tx.inputs
             .iter()
             .enumerate()
             .filter_map(move |(vin, txin)| self.spends.get(&txin.previous_output).zip(Some(vin)))
@@ -651,11 +652,11 @@ impl<A: Anchor> TxGraph<A> {
             other_tx: &Arc<Transaction>,
         ) -> Option<Arc<Transaction>> {
             debug_assert_eq!(
-                original_tx.input.len(),
-                other_tx.input.len(),
+                original_tx.inputs.len(),
+                other_tx.inputs.len(),
                 "tx input count must be the same"
             );
-            let merged_input = Iterator::zip(original_tx.input.iter(), other_tx.input.iter())
+            let merged_input = Iterator::zip(original_tx.inputs.iter(), other_tx.inputs.iter())
                 .map(|(original_txin, other_txin)| {
                     let original_key = core::cmp::Reverse((
                         original_txin.witness.is_empty(),
@@ -674,14 +675,14 @@ impl<A: Anchor> TxGraph<A> {
                     }
                 })
                 .collect::<Vec<_>>();
-            if merged_input == original_tx.input {
+            if merged_input == original_tx.inputs {
                 return None;
             }
-            if merged_input == other_tx.input {
+            if merged_input == other_tx.inputs {
                 return Some(other_tx.clone());
             }
             Some(Arc::new(Transaction {
-                input: merged_input,
+                inputs: merged_input,
                 ..(**original_tx).clone()
             }))
         }
@@ -702,9 +703,9 @@ impl<A: Anchor> TxGraph<A> {
                 }
             }
             partial_tx => {
-                for txin in &tx.input {
+                for txin in &tx.inputs {
                     // this means the tx is coinbase so there is no previous output
-                    if txin.previous_output.is_null() {
+                    if txin.previous_output == OutPoint::COINBASE_PREVOUT {
                         continue;
                     }
                     self.spends
@@ -1058,8 +1059,10 @@ impl<A: Anchor> TxGraph<A> {
 #[must_use]
 pub struct ChangeSet<A = ()> {
     /// Added transactions.
+    #[cfg_attr(feature = "serde", serde(with = "crate::serde_util::tx_set"))]
     pub txs: BTreeSet<Arc<Transaction>>,
     /// Added txouts.
+    #[cfg_attr(feature = "serde", serde(with = "crate::serde_util::txout_map"))]
     pub txouts: BTreeMap<OutPoint, TxOut>,
     /// Added anchors.
     pub anchors: BTreeSet<(A, Txid)>,
@@ -1092,10 +1095,10 @@ impl<A> ChangeSet<A> {
         self.txs
             .iter()
             .flat_map(|tx| {
-                tx.output
+                tx.outputs
                     .iter()
                     .enumerate()
-                    .map(move |(vout, txout)| (OutPoint::new(tx.compute_txid(), vout as _), txout))
+                    .map(move |(vout, txout)| (OutPoint { txid: tx.compute_txid(), vout: vout as _ }, txout))
             })
             .chain(self.txouts.iter().map(|(op, txout)| (*op, txout)))
     }
@@ -1298,7 +1301,7 @@ where
 
     fn populate_queue(&mut self, depth: usize, tx: Arc<Transaction>) {
         let ancestors = tx
-            .input
+            .inputs
             .iter()
             .map(|txin| txin.previous_output.txid)
             .filter(|&prev_txid| self.visited.insert(prev_txid))
@@ -1453,5 +1456,5 @@ where
 }
 
 fn tx_outpoint_range(txid: Txid) -> RangeInclusive<OutPoint> {
-    OutPoint::new(txid, u32::MIN)..=OutPoint::new(txid, u32::MAX)
+    OutPoint { txid: txid, vout: u32::MIN }..=OutPoint { txid: txid, vout: u32::MAX }
 }

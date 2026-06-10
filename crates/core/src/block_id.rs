@@ -1,4 +1,4 @@
-use bitcoin::{hashes::Hash, BlockHash};
+use bitcoin::BlockHash;
 
 /// A reference to a block in the canonical chain.
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, core::hash::Hash)]
@@ -14,7 +14,7 @@ impl Default for BlockId {
     fn default() -> Self {
         Self {
             height: Default::default(),
-            hash: BlockHash::all_zeros(),
+            hash: BlockHash::from_byte_array([0; 32]),
         }
     }
 }

@@ -1,5 +1,8 @@
+use crate::compat;
 use crate::miniscript::{Descriptor, DescriptorPublicKey};
-use bitcoin::hashes::{hash_newtype, sha256, Hash};
+#[cfg(feature = "serde")]
+use bitcoin::hashes::impl_serde_for_newtype;
+use bitcoin::hashes::{hash_newtype, impl_hex_for_newtype, sha256};
 use bitcoin::Amount;
 
 hash_newtype! {
@@ -11,6 +14,10 @@ hash_newtype! {
     ///
     pub struct DescriptorId(pub sha256::Hash);
 }
+
+impl_hex_for_newtype!(DescriptorId);
+#[cfg(feature = "serde")]
+impl_serde_for_newtype!(DescriptorId);
 
 /// A trait to extend the functionality of a miniscript descriptor.
 pub trait DescriptorExt {
@@ -25,10 +32,12 @@ pub trait DescriptorExt {
 
 impl DescriptorExt for Descriptor<DescriptorPublicKey> {
     fn dust_value(&self) -> Amount {
-        self.at_derivation_index(0)
-            .expect("descriptor can't have hardened derivation")
-            .script_pubkey()
-            .minimal_non_dust()
+        compat::amount_from_ms(
+            self.at_derivation_index(0)
+                .expect("descriptor can't have hardened derivation")
+                .script_pubkey()
+                .minimal_non_dust(),
+        )
     }
 
     fn descriptor_id(&self) -> DescriptorId {

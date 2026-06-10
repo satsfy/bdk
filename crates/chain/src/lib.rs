@@ -55,6 +55,10 @@ pub mod example_utils;
 #[cfg(feature = "miniscript")]
 pub use miniscript;
 #[cfg(feature = "miniscript")]
+pub mod compat;
+#[cfg(feature = "serde")]
+mod serde_util;
+#[cfg(feature = "miniscript")]
 mod descriptor_ext;
 #[cfg(feature = "miniscript")]
 pub use descriptor_ext::{DescriptorExt, DescriptorId};

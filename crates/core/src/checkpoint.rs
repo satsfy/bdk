@@ -190,7 +190,7 @@ pub trait ToBlockTime {
 
 impl ToBlockTime for Header {
     fn to_blocktime(&self) -> u32 {
-        self.time
+        self.time.to_u32()
     }
 }
 
@@ -626,10 +626,10 @@ mod tests {
     #[test]
     fn checkpoint_drop_is_not_recursive() {
         let run = || {
-            let mut cp = CheckPoint::new(0, bitcoin::hashes::Hash::hash(b"genesis"));
+            let mut cp = CheckPoint::new(0, bdk_testenv::utils::TestHash::hash_data(b"genesis"));
 
             for height in 1u32..=(1024 * 10) {
-                let hash: BlockHash = bitcoin::hashes::Hash::hash(height.to_be_bytes().as_slice());
+                let hash: BlockHash = bdk_testenv::utils::TestHash::hash_data(height.to_be_bytes().as_slice());
                 cp = cp.push(height, hash).unwrap();
             }
 
@@ -648,10 +648,10 @@ mod tests {
     fn checkpoint_does_not_leak() {
         const CHAIN_LEN: u32 = 1000;
 
-        let mut cp = CheckPoint::new(0, bitcoin::hashes::Hash::hash(b"genesis"));
+        let mut cp = CheckPoint::new(0, bdk_testenv::utils::TestHash::hash_data(b"genesis"));
 
         for height in 1u32..=CHAIN_LEN {
-            let hash: BlockHash = bitcoin::hashes::Hash::hash(height.to_be_bytes().as_slice());
+            let hash: BlockHash = bdk_testenv::utils::TestHash::hash_data(height.to_be_bytes().as_slice());
             cp = cp.push(height, hash).unwrap();
         }
 

@@ -27,6 +27,8 @@ use esplora_client::TxStatus;
 
 pub use esplora_client;
 
+pub mod compat;
+
 #[cfg(feature = "blocking")]
 mod blocking_ext;
 #[cfg(feature = "blocking")]
@@ -52,7 +54,10 @@ fn insert_anchor_or_seen_at_from_status(
     } = status
     {
         let anchor = ConfirmationBlockTime {
-            block_id: BlockId { height, hash },
+            block_id: BlockId {
+                height,
+                hash: compat::blockhash_from_032(hash),
+            },
             confirmation_time: time,
         };
         update.anchors.insert((anchor, txid));
@@ -70,13 +75,13 @@ fn insert_prevouts(
 ) {
     let prevouts = esplora_inputs
         .into_iter()
-        .filter_map(|vin| Some((vin.txid, vin.vout, vin.prevout?)));
+        .filter_map(|vin| Some((compat::txid_from_032(vin.txid), vin.vout, vin.prevout?)));
     for (prev_txid, prev_vout, prev_txout) in prevouts {
         update.txouts.insert(
-            OutPoint::new(prev_txid, prev_vout),
+            OutPoint { txid: prev_txid, vout: prev_vout },
             TxOut {
-                script_pubkey: prev_txout.scriptpubkey,
-                value: Amount::from_sat(prev_txout.value),
+                script_pubkey: compat::spk_from_032(prev_txout.scriptpubkey),
+                amount: Amount::from_sat(prev_txout.value).expect("amount must be within bounds"),
             },
         );
     }

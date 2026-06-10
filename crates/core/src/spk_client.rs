@@ -4,17 +4,17 @@ use crate::{
     collections::{BTreeMap, HashMap, HashSet},
     CheckPoint, ConfirmationBlockTime, Indexed,
 };
-use bitcoin::{BlockHash, OutPoint, Script, ScriptBuf, Txid};
+use bitcoin::{BlockHash, OutPoint, ScriptPubKey, ScriptPubKeyBuf, Txid};
 
 type InspectSync<I> = dyn FnMut(SyncItem<I>, SyncProgress) + Send + 'static;
 
-type InspectFullScan<K> = dyn FnMut(K, u32, &Script) + Send + 'static;
+type InspectFullScan<K> = dyn FnMut(K, u32, &ScriptPubKey) + Send + 'static;
 
 /// An item reported to the [`inspect`](SyncRequestBuilder::inspect) closure of [`SyncRequest`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SyncItem<'i, I> {
     /// Script pubkey sync item.
-    Spk(I, &'i Script),
+    Spk(I, &'i ScriptPubKey),
     /// Txid sync item.
     Txid(Txid),
     /// Outpoint sync item.
@@ -86,11 +86,11 @@ impl SyncProgress {
     }
 }
 
-/// [`Script`] with expected [`Txid`] histories.
+/// [`ScriptPubKey`] with expected [`Txid`] histories.
 #[derive(Debug, Clone)]
 pub struct SpkWithExpectedTxids {
     /// Script pubkey.
-    pub spk: ScriptBuf,
+    pub spk: ScriptPubKeyBuf,
 
     /// [`Txid`]s that we expect to appear in the chain source's spk history response.
     ///
@@ -99,8 +99,8 @@ pub struct SpkWithExpectedTxids {
     pub expected_txids: HashSet<Txid>,
 }
 
-impl From<ScriptBuf> for SpkWithExpectedTxids {
-    fn from(spk: ScriptBuf) -> Self {
+impl From<ScriptPubKeyBuf> for SpkWithExpectedTxids {
+    fn from(spk: ScriptPubKeyBuf) -> Self {
         Self {
             spk,
             expected_txids: HashSet::new(),
@@ -117,8 +117,8 @@ pub struct SyncRequestBuilder<I = (), D = BlockHash> {
 }
 
 impl SyncRequestBuilder<()> {
-    /// Add [`Script`]s that will be synced against.
-    pub fn spks(self, spks: impl IntoIterator<Item = ScriptBuf>) -> Self {
+    /// Add [`ScriptPubKey`]s that will be synced against.
+    pub fn spks(self, spks: impl IntoIterator<Item = ScriptPubKeyBuf>) -> Self {
         self.spks_with_indexes(spks.into_iter().map(|spk| ((), spk)))
     }
 }
@@ -132,7 +132,7 @@ impl<I, D> SyncRequestBuilder<I, D> {
         self
     }
 
-    /// Add [`Script`]s coupled with associated indexes that will be synced against.
+    /// Add [`ScriptPubKey`]s coupled with associated indexes that will be synced against.
     ///
     /// # Example
     ///
@@ -144,7 +144,7 @@ impl<I, D> SyncRequestBuilder<I, D> {
     /// # use bdk_chain::spk_client::SyncRequest;
     /// # use bdk_chain::indexer::keychain_txout::KeychainTxOutIndex;
     /// # use bdk_chain::miniscript::{Descriptor, DescriptorPublicKey};
-    /// # let secp = bdk_chain::bitcoin::secp256k1::Secp256k1::signing_only();
+    /// # let secp = bdk_chain::compat::ms_bitcoin::secp256k1::Secp256k1::signing_only();
     /// # let (descriptor_a,_) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "tr([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/0/*)").unwrap();
     /// # let (descriptor_b,_) = Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, "tr([73c5da0a/86'/0'/0']xprv9xgqHN7yz9MwCkxsBPN5qetuNdQSUttZNKw1dcYTV4mkaAFiBVGQziHs3NRSWMkCzvgjEe3n9xV8oYywvM8at9yRqyaZVz6TYYhX98VjsUk/1/*)").unwrap();
     /// let mut indexer = KeychainTxOutIndex::<&'static str>::default();
@@ -171,7 +171,7 @@ impl<I, D> SyncRequestBuilder<I, D> {
     ///     .build();
     /// # Ok::<_, bdk_chain::keychain_txout::InsertDescriptorError<_>>(())
     /// ```
-    pub fn spks_with_indexes(mut self, spks: impl IntoIterator<Item = (I, ScriptBuf)>) -> Self {
+    pub fn spks_with_indexes(mut self, spks: impl IntoIterator<Item = (I, ScriptPubKeyBuf)>) -> Self {
         self.inner.spks.extend(spks);
         self
     }
@@ -179,7 +179,7 @@ impl<I, D> SyncRequestBuilder<I, D> {
     /// Add transactions that are expected to exist under the given spks.
     ///
     /// This is useful for detecting a malicious replacement of an incoming transaction.
-    pub fn expected_spk_txids(mut self, txs: impl IntoIterator<Item = (ScriptBuf, Txid)>) -> Self {
+    pub fn expected_spk_txids(mut self, txs: impl IntoIterator<Item = (ScriptPubKeyBuf, Txid)>) -> Self {
         for (spk, txid) in txs {
             self.inner
                 .spk_expected_txids
@@ -225,10 +225,10 @@ impl<I, D> SyncRequestBuilder<I, D> {
 ///
 /// ```rust
 /// # use std::io::{self, Write};
-/// # use bdk_chain::{bitcoin::{hashes::Hash, ScriptBuf}, local_chain::LocalChain};
+/// # use bdk_chain::{bitcoin::{BlockHash, ScriptPubKeyBuf}, local_chain::LocalChain};
 /// # use bdk_chain::spk_client::SyncRequest;
-/// # let (local_chain, _) = LocalChain::from_genesis(Hash::all_zeros());
-/// # let scripts = [ScriptBuf::default(), ScriptBuf::default()];
+/// # let (local_chain, _) = LocalChain::from_genesis(BlockHash::from_byte_array([0; 32]));
+/// # let scripts = [ScriptPubKeyBuf::default(), ScriptPubKeyBuf::default()];
 /// // Construct a sync request.
 /// let sync_request = SyncRequest::builder()
 ///     // Provide chain tip of the local wallet.
@@ -259,9 +259,9 @@ impl<I, D> SyncRequestBuilder<I, D> {
 pub struct SyncRequest<I = (), D = BlockHash> {
     start_time: u64,
     chain_tip: Option<CheckPoint<D>>,
-    spks: VecDeque<(I, ScriptBuf)>,
+    spks: VecDeque<(I, ScriptPubKeyBuf)>,
     spks_consumed: usize,
-    spk_expected_txids: HashMap<ScriptBuf, HashSet<Txid>>,
+    spk_expected_txids: HashMap<ScriptPubKeyBuf, HashSet<Txid>>,
     txids: VecDeque<Txid>,
     txids_consumed: usize,
     outpoints: VecDeque<OutPoint>,
@@ -337,7 +337,7 @@ impl<I, D> SyncRequest<I, D> {
         self.chain_tip.clone()
     }
 
-    /// Advances the sync request and returns the next [`ScriptBuf`] with corresponding [`Txid`]
+    /// Advances the sync request and returns the next [`ScriptPubKeyBuf`] with corresponding [`Txid`]
     /// history.
     ///
     /// Returns [`None`] when there are no more scripts remaining in the request.
@@ -376,7 +376,7 @@ impl<I, D> SyncRequest<I, D> {
         Some(outpoint)
     }
 
-    /// Iterate over [`ScriptBuf`]s with corresponding [`Txid`] histories contained in this request.
+    /// Iterate over [`ScriptPubKeyBuf`]s with corresponding [`Txid`] histories contained in this request.
     pub fn iter_spks_with_expected_txids(
         &mut self,
     ) -> impl ExactSizeIterator<Item = SpkWithExpectedTxids> + '_ {
@@ -448,7 +448,7 @@ impl<K: Ord, D> FullScanRequestBuilder<K, D> {
     pub fn spks_for_keychain(
         mut self,
         keychain: K,
-        spks: impl IntoIterator<IntoIter = impl Iterator<Item = Indexed<ScriptBuf>> + Send + 'static>,
+        spks: impl IntoIterator<IntoIter = impl Iterator<Item = Indexed<ScriptPubKeyBuf>> + Send + 'static>,
     ) -> Self {
         self.inner
             .spks_by_keychain
@@ -471,7 +471,7 @@ impl<K: Ord, D> FullScanRequestBuilder<K, D> {
     /// Set the closure that will inspect every sync item visited.
     pub fn inspect<F>(mut self, inspect: F) -> Self
     where
-        F: FnMut(K, u32, &Script) + Send + 'static,
+        F: FnMut(K, u32, &ScriptPubKey) + Send + 'static,
     {
         self.inner.inspect = Box::new(inspect);
         self
@@ -495,7 +495,7 @@ impl<K: Ord, D> FullScanRequestBuilder<K, D> {
 pub struct FullScanRequest<K, D = BlockHash> {
     start_time: u64,
     chain_tip: Option<CheckPoint<D>>,
-    spks_by_keychain: BTreeMap<K, Box<dyn Iterator<Item = Indexed<ScriptBuf>> + Send>>,
+    spks_by_keychain: BTreeMap<K, Box<dyn Iterator<Item = Indexed<ScriptPubKeyBuf>> + Send>>,
     last_revealed: BTreeMap<K, u32>,
     inspect: Box<InspectFullScan<K>>,
 }
@@ -564,14 +564,14 @@ impl<K: Ord + Clone, D> FullScanRequest<K, D> {
         self.last_revealed.get(keychain).copied()
     }
 
-    /// Advances the full scan request and returns the next indexed [`ScriptBuf`] of the given
+    /// Advances the full scan request and returns the next indexed [`ScriptPubKeyBuf`] of the given
     /// `keychain`.
-    pub fn next_spk(&mut self, keychain: K) -> Option<Indexed<ScriptBuf>> {
+    pub fn next_spk(&mut self, keychain: K) -> Option<Indexed<ScriptPubKeyBuf>> {
         self.iter_spks(keychain).next()
     }
 
-    /// Iterate over indexed [`ScriptBuf`]s contained in this request of the given `keychain`.
-    pub fn iter_spks(&mut self, keychain: K) -> impl Iterator<Item = Indexed<ScriptBuf>> + '_ {
+    /// Iterate over indexed [`ScriptPubKeyBuf`]s contained in this request of the given `keychain`.
+    pub fn iter_spks(&mut self, keychain: K) -> impl Iterator<Item = Indexed<ScriptPubKeyBuf>> + '_ {
         let spks = self.spks_by_keychain.get_mut(&keychain);
         let inspect = &mut self.inspect;
         KeychainSpkIter {
@@ -618,12 +618,12 @@ impl<K, A> FullScanResponse<K, A> {
 
 struct KeychainSpkIter<'r, K> {
     keychain: K,
-    spks: Option<&'r mut Box<dyn Iterator<Item = Indexed<ScriptBuf>> + Send>>,
+    spks: Option<&'r mut Box<dyn Iterator<Item = Indexed<ScriptPubKeyBuf>> + Send>>,
     inspect: &'r mut Box<InspectFullScan<K>>,
 }
 
 impl<K: Ord + Clone> Iterator for KeychainSpkIter<'_, K> {
-    type Item = Indexed<ScriptBuf>;
+    type Item = Indexed<ScriptPubKeyBuf>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (i, spk) = self.spks.as_mut()?.next()?;

@@ -18,7 +18,13 @@ workspace = true
 [dependencies]
 bdk_chain = { path = "../chain", version = "0.23.1", default-features = false }
 electrsd = { version = "0.38.0", features = [ "legacy" ], default-features = false }
-bitcoin = { version = "0.32.0", default-features = false }
+# The compat layer branch: https://github.com/satsfy/rust-bitcoin/pull/38
+bitcoin = { git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2", default-features = false, features = [
+    "compat",
+] }
+bitcoin-units = { version = "0.1.101", git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2", default-features = false, features = [
+    "alloc",
+] }
 
 [dev-dependencies]
 bdk_testenv = { path = "." }

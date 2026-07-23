@@ -466,8 +466,9 @@ impl BitcoindRpcErrorExt for bitcoincore_rpc::Error {
 mod test {
     use crate::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
     use bdk_chain::local_chain::LocalChain;
+    use bdk_testenv::utils::sat;
     use bdk_testenv::{anyhow, TestEnv};
-    use bitcoin::{hashes::Hash, Address, Amount, ScriptBuf, Txid, WScriptHash};
+    use bitcoin::{hashes::Hash, Address, ScriptBuf, Txid, WScriptHash};
     use std::collections::HashSet;
 
     #[test]
@@ -492,7 +493,7 @@ mod test {
 
         // Send a tx at different heights and ensure txs are accumulating in expected_mempool_txids.
         for _ in 0..10 {
-            let sent_txid = env.send(&addr_to_track, Amount::from_sat(1_000))?;
+            let sent_txid = env.send(&addr_to_track, sat(1_000))?;
             mempool_txids.insert(sent_txid);
             emitter.mempool()?;
             env.mine_blocks(1, None)?;

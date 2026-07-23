@@ -11,9 +11,8 @@ use crate::{
     DescriptorExt, DescriptorId, Indexed, Indexer, KeychainIndexed, SpkIterator,
 };
 use alloc::{borrow::ToOwned, vec::Vec};
-use bitcoin::{
-    key::Secp256k1, Amount, OutPoint, Script, ScriptBuf, SignedAmount, Transaction, TxOut, Txid,
-};
+use bitcoin::compat::{Amount, SignedAmount};
+use bitcoin::{key::Secp256k1, OutPoint, Script, ScriptBuf, Transaction, TxOut, Txid};
 use core::{
     fmt::Debug,
     ops::{Bound, RangeBounds},

@@ -9,12 +9,15 @@ use bdk_chain::{
     tx_graph::{ChangeSet, TxGraph},
     Anchor, ChainPosition, Merge,
 };
-use bdk_testenv::{block_id, hash, utils::new_tx};
+use bdk_testenv::{
+    block_id, hash,
+    utils::{new_tx, sat, ssat},
+};
 use bitcoin::hex::FromHex;
 use bitcoin::Witness;
 use bitcoin::{
-    absolute, hashes::Hash, transaction, Amount, BlockHash, OutPoint, ScriptBuf, SignedAmount,
-    Transaction, TxIn, TxOut, Txid,
+    absolute, hashes::Hash, transaction, Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxIn,
+    TxOut, Txid,
 };
 use common::*;
 use core::iter;
@@ -539,14 +542,14 @@ fn test_calculate_fee() {
         }],
     };
 
-    assert_eq!(graph.calculate_fee(&tx), Ok(Amount::from_sat(100)));
+    assert_eq!(graph.calculate_fee(&tx), Ok(sat(100)));
 
     tx.input.remove(2);
 
     // fee would be negative, should return CalculateFeeError::NegativeFee
     assert_eq!(
         graph.calculate_fee(&tx),
-        Err(CalculateFeeError::NegativeFee(SignedAmount::from_sat(-200)))
+        Err(CalculateFeeError::NegativeFee(ssat(-200)))
     );
 
     // If we have an unknown outpoint, fee should return CalculateFeeError::MissingTxOut.
@@ -578,7 +581,7 @@ fn test_calculate_fee_on_coinbase() {
 
     let graph = TxGraph::<()>::default();
 
-    assert_eq!(graph.calculate_fee(&tx), Ok(Amount::ZERO));
+    assert_eq!(graph.calculate_fee(&tx), Ok(sat(0)));
 }
 
 // `test_walk_ancestors` uses the following transaction structure:

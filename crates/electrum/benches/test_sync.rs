@@ -1,4 +1,4 @@
-use bdk_chain::bitcoin::{Address, Amount, ScriptBuf};
+use bdk_chain::bitcoin::{Address, ScriptBuf};
 use bdk_core::{
     bitcoin::{
         consensus::WriteExt,
@@ -10,6 +10,7 @@ use bdk_core::{
     CheckPoint,
 };
 use bdk_electrum::BdkElectrumClient;
+use bdk_testenv::utils::sat;
 use bdk_testenv::{anyhow, TestEnv};
 use criterion::{criterion_group, criterion_main, Criterion};
 use electrum_client::ElectrumApi;
@@ -64,7 +65,7 @@ pub fn test_sync_performance(c: &mut Criterion) {
     for i in 0..NUM_BLOCKS {
         let spk = get_test_spk(i);
         let addr = Address::from_script(&spk, Network::Regtest).unwrap();
-        env.send(&addr, Amount::from_sat(10_000)).unwrap();
+        env.send(&addr, sat(10_000)).unwrap();
         env.mine_blocks(1, None).unwrap();
 
         spks.push(spk);

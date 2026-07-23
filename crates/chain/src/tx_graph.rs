@@ -137,7 +137,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bdk_core::ConfirmationBlockTime;
 pub use bdk_core::TxUpdate;
-use bitcoin::{Amount, OutPoint, SignedAmount, Transaction, TxOut, Txid};
+use bitcoin::compat::{Amount, SignedAmount};
+use bitcoin::{OutPoint, Transaction, TxOut, Txid};
 use core::fmt::{self, Formatter};
 use core::ops::{Deref, RangeInclusive};
 
@@ -428,7 +429,7 @@ impl<A> TxGraph<A> {
         }
 
         let (inputs_sum, missing_outputs) = tx.input.iter().fold(
-            (SignedAmount::ZERO, Vec::new()),
+            (bitcoin::SignedAmount::ZERO, Vec::new()),
             |(mut sum, mut missing_outpoints), txin| match self.get_txout(txin.previous_output) {
                 None => {
                     missing_outpoints.push(txin.previous_output);
@@ -448,11 +449,15 @@ impl<A> TxGraph<A> {
             .output
             .iter()
             .map(|txout| txout.value.to_signed().expect("valid `SignedAmount`"))
-            .sum::<SignedAmount>();
+            .sum::<bitcoin::SignedAmount>();
 
         let fee = inputs_sum - outputs_sum;
-        fee.to_unsigned()
-            .map_err(|_| CalculateFeeError::NegativeFee(fee))
+        match fee.to_unsigned() {
+            Ok(fee) => Ok(fee.to_stable().expect("fee within valid amount range")),
+            Err(_) => Err(CalculateFeeError::NegativeFee(
+                fee.to_stable().expect("fee within valid amount range"),
+            )),
+        }
     }
 
     /// The transactions spending from this output.

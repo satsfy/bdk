@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, ops::Deref};
 
 use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
 use bdk_chain::{
-    bitcoin::{Address, Amount, Txid},
+    bitcoin::{compat::Amount, Address, Txid},
     local_chain::{CheckPoint, LocalChain},
     spk_txout::SpkTxOutIndex,
     Balance, BlockId, IndexedTxGraph, Merge,
@@ -186,7 +186,7 @@ fn test_into_tx_graph() -> anyhow::Result<()> {
         for _ in 0..3 {
             txids.insert(
                 env.rpc_client()
-                    .send_to_address(&addr_0, Amount::from_sat(10_000))?
+                    .send_to_address(&addr_0, bitcoin::Amount::from_sat(10_000))?
                     .txid()?,
             );
         }
@@ -335,7 +335,7 @@ fn get_balance(
 fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
     const PREMINE_COUNT: usize = 101;
     const ADDITIONAL_COUNT: usize = 11;
-    const SEND_AMOUNT: Amount = Amount::from_sat(10_000);
+    const SEND_AMOUNT: Amount = Amount::from_sat_u32(10_000);
 
     let env = TestEnv::new()?;
 
@@ -395,7 +395,7 @@ fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
     assert_eq!(
         get_balance(&recv_chain, &recv_graph)?,
         Balance {
-            confirmed: SEND_AMOUNT * ADDITIONAL_COUNT as u64,
+            confirmed: (SEND_AMOUNT * ADDITIONAL_COUNT as u64).expect("valid amount"),
             ..Balance::default()
         },
         "initial balance must be correct",
@@ -409,8 +409,9 @@ fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
         assert_eq!(
             get_balance(&recv_chain, &recv_graph)?,
             Balance {
-                trusted_pending: SEND_AMOUNT * reorg_count as u64,
-                confirmed: SEND_AMOUNT * (ADDITIONAL_COUNT - reorg_count) as u64,
+                trusted_pending: (SEND_AMOUNT * reorg_count as u64).expect("valid amount"),
+                confirmed: (SEND_AMOUNT * (ADDITIONAL_COUNT - reorg_count) as u64)
+                    .expect("valid amount"),
                 ..Balance::default()
             },
             "reorg_count: {reorg_count}",
@@ -451,7 +452,7 @@ fn mempool_avoids_re_emission() -> anyhow::Result<()> {
 
     // have some random txs in mempool
     let exp_txids = (0..MEMPOOL_TX_COUNT)
-        .map(|_| env.send(&addr, Amount::from_sat(2100)))
+        .map(|_| env.send(&addr, Amount::from_sat_u32(2100)))
         .collect::<Result<BTreeSet<Txid>, _>>()?;
 
     // First two emissions should include all transactions.
@@ -623,7 +624,7 @@ fn test_expect_tx_evicted() -> anyhow::Result<()> {
         .address()?
         .assume_checked();
 
-    let outputs = [Output::new(addr, Amount::from_btc(49.99)?)];
+    let outputs = [Output::new(addr, bitcoin::Amount::from_btc(49.99)?)];
     let tx = core
         .create_raw_transaction(&[utxo], &outputs)?
         .into_model()?

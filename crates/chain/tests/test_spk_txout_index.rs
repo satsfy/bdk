@@ -1,8 +1,7 @@
 use bdk_chain::spk_txout::{CreatedTxOut, SpentTxOut};
 use bdk_chain::{spk_txout::SpkTxOutIndex, Indexer};
-use bitcoin::{
-    absolute, transaction, Amount, OutPoint, ScriptBuf, SignedAmount, Transaction, TxIn, TxOut,
-};
+use bdk_testenv::utils::{sat, ssat};
+use bitcoin::{absolute, transaction, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut};
 use core::ops::Bound;
 
 #[test]
@@ -24,23 +23,14 @@ fn spk_txout_sent_and_received() {
         }],
     };
 
-    assert_eq!(
-        index.sent_and_received(&tx1, ..),
-        (Amount::from_sat(0), Amount::from_sat(42_000))
-    );
-    assert_eq!(
-        index.sent_and_received(&tx1, ..1),
-        (Amount::from_sat(0), Amount::from_sat(42_000))
-    );
-    assert_eq!(
-        index.sent_and_received(&tx1, 1..),
-        (Amount::from_sat(0), Amount::from_sat(0))
-    );
-    assert_eq!(index.net_value(&tx1, ..), SignedAmount::from_sat(42_000));
+    assert_eq!(index.sent_and_received(&tx1, ..), (sat(0), sat(42_000)));
+    assert_eq!(index.sent_and_received(&tx1, ..1), (sat(0), sat(42_000)));
+    assert_eq!(index.sent_and_received(&tx1, 1..), (sat(0), sat(0)));
+    assert_eq!(index.net_value(&tx1, ..), ssat(42_000));
     index.index_tx(&tx1);
     assert_eq!(
         index.sent_and_received(&tx1, ..),
-        (Amount::from_sat(0), Amount::from_sat(42_000)),
+        (sat(0), sat(42_000)),
         "shouldn't change after scanning"
     );
 
@@ -68,17 +58,14 @@ fn spk_txout_sent_and_received() {
 
     assert_eq!(
         index.sent_and_received(&tx2, ..),
-        (Amount::from_sat(42_000), Amount::from_sat(50_000))
+        (sat(42_000), sat(50_000))
     );
     assert_eq!(
         index.sent_and_received(&tx2, ..1),
-        (Amount::from_sat(42_000), Amount::from_sat(30_000))
+        (sat(42_000), sat(30_000))
     );
-    assert_eq!(
-        index.sent_and_received(&tx2, 1..),
-        (Amount::from_sat(0), Amount::from_sat(20_000))
-    );
-    assert_eq!(index.net_value(&tx2, ..), SignedAmount::from_sat(8_000));
+    assert_eq!(index.sent_and_received(&tx2, 1..), (sat(0), sat(20_000)));
+    assert_eq!(index.net_value(&tx2, ..), ssat(8_000));
 }
 
 #[test]

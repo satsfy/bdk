@@ -481,10 +481,18 @@ impl<A: Anchor> CanonicalView<A> {
         }
 
         Balance {
-            immature,
-            trusted_pending,
-            untrusted_pending,
-            confirmed,
+            immature: immature
+                .to_stable()
+                .expect("balance within valid amount range"),
+            trusted_pending: trusted_pending
+                .to_stable()
+                .expect("balance within valid amount range"),
+            untrusted_pending: untrusted_pending
+                .to_stable()
+                .expect("balance within valid amount range"),
+            confirmed: confirmed
+                .to_stable()
+                .expect("balance within valid amount range"),
         }
     }
 }

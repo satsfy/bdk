@@ -390,11 +390,15 @@ impl TestEnv {
     }
 
     /// Send a tx of a given `amount` to a given `address`.
-    pub fn send(&self, address: &Address<NetworkChecked>, amount: Amount) -> anyhow::Result<Txid> {
+    pub fn send(
+        &self,
+        address: &Address<NetworkChecked>,
+        amount: bdk_chain::bitcoin::compat::Amount,
+    ) -> anyhow::Result<Txid> {
         let txid = self
             .bitcoind
             .client
-            .send_to_address(address, amount)?
+            .send_to_address(address, Amount::from_stable(amount))?
             .txid()?;
         Ok(txid)
     }
@@ -424,9 +428,9 @@ impl TestEnv {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test {
+    use crate::utils::sat;
     use crate::{MineParams, TestEnv};
     use bdk_chain::bitcoin::opcodes::OP_TRUE;
-    use bdk_chain::bitcoin::Amount;
     use core::time::Duration;
     use electrsd::bitcoind::anyhow::Result;
     use std::collections::BTreeSet;
@@ -496,9 +500,9 @@ mod test {
         );
 
         // Now try mining with min time & some txs.
-        let txid1 = env.send(&addr, Amount::from_sat(100_000))?;
-        let txid2 = env.send(&addr, Amount::from_sat(200_000))?;
-        let txid3 = env.send(&addr, Amount::from_sat(300_000))?;
+        let txid1 = env.send(&addr, sat(100_000))?;
+        let txid2 = env.send(&addr, sat(200_000))?;
+        let txid3 = env.send(&addr, sat(300_000))?;
         let min_time = env.get_block_template()?.min_time;
         let (_b_height, b_hash) = env.mine_block(MineParams {
             empty: false,

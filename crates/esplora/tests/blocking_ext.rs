@@ -231,7 +231,7 @@ pub fn test_update_tx_graph_without_keychain() -> anyhow::Result<()> {
         // Check that the calculated fee matches the fee from the transaction data.
         assert_eq!(
             fee,
-            Amount::from_float_in(tx_fee, bdk_core::bitcoin::Denomination::Bitcoin)?
+            Amount::from_float_in(tx_fee, bdk_core::bitcoin::Denomination::Bitcoin)?.to_stable()?
         );
     }
 

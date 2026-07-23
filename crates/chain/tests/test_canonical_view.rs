@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use bdk_chain::{local_chain::LocalChain, ConfirmationBlockTime, TxGraph};
-use bdk_testenv::{hash, utils::new_tx};
+use bdk_testenv::{
+    hash,
+    utils::{new_tx, sat},
+};
 use bitcoin::{Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxIn, TxOut};
 
 #[test]
@@ -63,8 +66,8 @@ fn test_min_confirmations_parameter() {
         1,
     );
 
-    assert_eq!(balance_1_conf.confirmed, Amount::from_sat(50_000));
-    assert_eq!(balance_1_conf.trusted_pending, Amount::ZERO);
+    assert_eq!(balance_1_conf.confirmed, sat(50_000));
+    assert_eq!(balance_1_conf.trusted_pending, sat(0));
 
     // Test min_confirmations = 6: Should be confirmed (has exactly 6 confirmations)
     let balance_6_conf = canonical_view.balance(
@@ -72,8 +75,8 @@ fn test_min_confirmations_parameter() {
         |_, _| true, // trust all
         6,
     );
-    assert_eq!(balance_6_conf.confirmed, Amount::from_sat(50_000));
-    assert_eq!(balance_6_conf.trusted_pending, Amount::ZERO);
+    assert_eq!(balance_6_conf.confirmed, sat(50_000));
+    assert_eq!(balance_6_conf.trusted_pending, sat(0));
 
     // Test min_confirmations = 7: Should be trusted pending (only has 6 confirmations)
     let balance_7_conf = canonical_view.balance(
@@ -81,8 +84,8 @@ fn test_min_confirmations_parameter() {
         |_, _| true, // trust all
         7,
     );
-    assert_eq!(balance_7_conf.confirmed, Amount::ZERO);
-    assert_eq!(balance_7_conf.trusted_pending, Amount::from_sat(50_000));
+    assert_eq!(balance_7_conf.confirmed, sat(0));
+    assert_eq!(balance_7_conf.trusted_pending, sat(50_000));
 
     // Test min_confirmations = 0: Should behave same as 1 (confirmed)
     let balance_0_conf = canonical_view.balance(
@@ -90,8 +93,8 @@ fn test_min_confirmations_parameter() {
         |_, _| true, // trust all
         0,
     );
-    assert_eq!(balance_0_conf.confirmed, Amount::from_sat(50_000));
-    assert_eq!(balance_0_conf.trusted_pending, Amount::ZERO);
+    assert_eq!(balance_0_conf.confirmed, sat(50_000));
+    assert_eq!(balance_0_conf.trusted_pending, sat(0));
     assert_eq!(balance_0_conf, balance_1_conf);
 }
 
@@ -152,9 +155,9 @@ fn test_min_confirmations_with_untrusted_tx() {
     );
 
     // Should be untrusted pending (not enough confirmations and not trusted)
-    assert_eq!(balance.confirmed, Amount::ZERO);
-    assert_eq!(balance.trusted_pending, Amount::ZERO);
-    assert_eq!(balance.untrusted_pending, Amount::from_sat(25_000));
+    assert_eq!(balance.confirmed, sat(0));
+    assert_eq!(balance.trusted_pending, sat(0));
+    assert_eq!(balance.untrusted_pending, sat(25_000));
 }
 
 #[test]
@@ -270,13 +273,13 @@ fn test_min_confirmations_multiple_transactions() {
 
     assert_eq!(
         balance.confirmed,
-        Amount::from_sat(10_000 + 20_000) // tx0 + tx1
+        sat(10_000 + 20_000) // tx0 + tx1
     );
     assert_eq!(
         balance.trusted_pending,
-        Amount::from_sat(30_000) // tx2
+        sat(30_000) // tx2
     );
-    assert_eq!(balance.untrusted_pending, Amount::ZERO);
+    assert_eq!(balance.untrusted_pending, sat(0));
 
     // Test with min_confirmations = 10
     // tx0: 11 confirmations -> confirmed
@@ -286,11 +289,11 @@ fn test_min_confirmations_multiple_transactions() {
 
     assert_eq!(
         balance_high.confirmed,
-        Amount::from_sat(10_000) // only tx0
+        sat(10_000) // only tx0
     );
     assert_eq!(
         balance_high.trusted_pending,
-        Amount::from_sat(20_000 + 30_000) // tx1 + tx2
+        sat(20_000 + 30_000) // tx1 + tx2
     );
-    assert_eq!(balance_high.untrusted_pending, Amount::ZERO);
+    assert_eq!(balance_high.untrusted_pending, sat(0));
 }

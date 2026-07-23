@@ -1,7 +1,8 @@
 use bdk_bitcoind_rpc::bip158::{Error, FilterIter};
 use bdk_core::CheckPoint;
 use bdk_testenv::{anyhow, bitcoind, TestEnv};
-use bitcoin::{Address, Amount, Network, ScriptBuf};
+use bitcoin::compat::Amount;
+use bitcoin::{Address, Network, ScriptBuf};
 use bitcoincore_rpc::RpcApi;
 
 use crate::common::ClientExt;

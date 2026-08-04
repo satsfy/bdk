@@ -434,8 +434,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// [`sent_and_received`]: Self::sent_and_received
     pub fn net_value(&self, tx: &Transaction, range: impl RangeBounds<I>) -> StableSignedAmount {
         let (sent, received) = self.sent_and_received(tx, range);
-        (received.to_signed() - sent.to_signed())
-            .expect("difference of in-range amounts is in range")
+        received.signed_sub(sent)
     }
 
     /// Whether any of the inputs of this transaction spend a txout tracked or whether any output

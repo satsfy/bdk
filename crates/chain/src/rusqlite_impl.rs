@@ -142,16 +142,19 @@ impl ToSql for Impl<bitcoin::ScriptBuf> {
     }
 }
 
-impl FromSql for Impl<bitcoin::Amount> {
+impl FromSql for Impl<bitcoin::compat::Amount> {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        Ok(bitcoin::Amount::from_sat(value.as_i64()?.try_into().map_err(from_sql_error)?).into())
+        let sats: u64 = value.as_i64()?.try_into().map_err(from_sql_error)?;
+        bitcoin::compat::Amount::from_sat(sats)
+            .map(Self)
+            .map_err(from_sql_error)
     }
 }
 
-impl ToSql for Impl<bitcoin::Amount> {
+impl ToSql for Impl<bitcoin::compat::Amount> {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        let amount: i64 = self.to_sat().try_into().map_err(to_sql_error)?;
-        Ok(amount.into())
+        // A stable `Amount` never exceeds `MAX_MONEY`, which fits in an `i64`.
+        Ok((self.to_sat() as i64).into())
     }
 }
 
@@ -331,7 +334,7 @@ impl tx_graph::ChangeSet<ConfirmationBlockTime> {
             Ok((
                 row.get::<_, Impl<bitcoin::Txid>>("txid")?,
                 row.get::<_, u32>("vout")?,
-                row.get::<_, Impl<bitcoin::Amount>>("value")?,
+                row.get::<_, Impl<bitcoin::compat::Amount>>("value")?,
                 row.get::<_, Impl<bitcoin::ScriptBuf>>("script")?,
             ))
         })?;
@@ -340,7 +343,7 @@ impl tx_graph::ChangeSet<ConfirmationBlockTime> {
             changeset.txouts.insert(
                 bitcoin::OutPoint { txid, vout },
                 bitcoin::TxOut {
-                    value,
+                    value: bitcoin::Amount::from_stable(value),
                     script_pubkey,
                 },
             );
@@ -433,7 +436,7 @@ impl tx_graph::ChangeSet<ConfirmationBlockTime> {
             statement.execute(named_params! {
                 ":txid": Impl(op.txid),
                 ":vout": op.vout,
-                ":value": Impl(txo.value),
+                ":value": Impl(txo.value.to_stable().map_err(to_sql_error)?),
                 ":script": Impl(txo.script_pubkey.clone()),
             })?;
         }

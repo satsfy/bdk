@@ -1,4 +1,4 @@
-use bitcoin::compat::Amount;
+use bitcoin::compat::{Amount, NumOpResult};
 
 /// Balance, differentiated into various categories.
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
@@ -41,8 +41,16 @@ impl Balance {
 
     /// Get the whole balance visible to the wallet.
     pub fn total(&self) -> Amount {
-        (self.confirmed + (self.trusted_pending + (self.untrusted_pending + self.immature)))
-            .expect("sum of balances cannot exceed supply")
+        [
+            self.immature,
+            self.trusted_pending,
+            self.untrusted_pending,
+            self.confirmed,
+        ]
+        .into_iter()
+        .map(NumOpResult::from)
+        .sum::<NumOpResult<Amount>>()
+        .expect("sum of balances cannot exceed supply")
     }
 }
 

@@ -16,13 +16,9 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-# The compat layer branch: https://github.com/satsfy/rust-bitcoin/pull/38
-bitcoin = { git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2", default-features = false, features = [
-    "compat",
-] }
-bitcoin-units = { version = "0.1.101", git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2", default-features = false, features = [
-    "alloc",
-] }
+# The compat feature is supplied by the workspace [patch.crates-io] redirect.
+bitcoin = { version = "0.32", default-features = false, features = ["compat"] }
+bitcoin-units = { version = "0.1.101", default-features = false, features = ["alloc"] }
 bdk_core = { path = "../core", version = "0.6.2", default-features = false }
 serde = { version = "1", optional = true, features = ["derive", "rc"] }
 miniscript = { version = "13.0.0", git = "https://github.com/satsfy/rust-miniscript", branch = "units-compat-demo-13", optional = true, default-features = false }

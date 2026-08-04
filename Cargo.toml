@@ -24,6 +24,5 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [patch.crates-io]
 # The compat layer branch: https://github.com/satsfy/rust-bitcoin/pull/38
-bitcoin = { git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2", default-features = false, features = [
-    "compat",
-] }
+bitcoin = { git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2" }
+bitcoin-units = { git = "https://github.com/satsfy/rust-bitcoin", branch = "units-compat-demo2" }

@@ -1,7 +1,9 @@
 use bdk_chain::spk_txout::{CreatedTxOut, SpentTxOut};
 use bdk_chain::{spk_txout::SpkTxOutIndex, Indexer};
-use bdk_testenv::utils::{sat, ssat};
-use bitcoin::{absolute, transaction, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut};
+use bitcoin::compat::{Amount as StableAmount, SignedAmount as StableSignedAmount};
+use bitcoin::{
+    absolute, transaction, Amount as LegacyAmount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
+};
 use core::ops::Bound;
 
 #[test]
@@ -18,19 +20,40 @@ fn spk_txout_sent_and_received() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+            value: LegacyAmount::from_sat(42_000),
             script_pubkey: spk1.clone(),
         }],
     };
 
-    assert_eq!(index.sent_and_received(&tx1, ..), (sat(0), sat(42_000)));
-    assert_eq!(index.sent_and_received(&tx1, ..1), (sat(0), sat(42_000)));
-    assert_eq!(index.sent_and_received(&tx1, 1..), (sat(0), sat(0)));
-    assert_eq!(index.net_value(&tx1, ..), ssat(42_000));
+    assert_eq!(
+        index.sent_and_received(&tx1, ..),
+        (
+            StableAmount::from_sat_u32(0),
+            StableAmount::from_sat_u32(42_000)
+        )
+    );
+    assert_eq!(
+        index.sent_and_received(&tx1, ..1),
+        (
+            StableAmount::from_sat_u32(0),
+            StableAmount::from_sat_u32(42_000)
+        )
+    );
+    assert_eq!(
+        index.sent_and_received(&tx1, 1..),
+        (StableAmount::from_sat_u32(0), StableAmount::from_sat_u32(0))
+    );
+    assert_eq!(
+        index.net_value(&tx1, ..),
+        StableSignedAmount::from_sat_i32(42_000)
+    );
     index.index_tx(&tx1);
     assert_eq!(
         index.sent_and_received(&tx1, ..),
-        (sat(0), sat(42_000)),
+        (
+            StableAmount::from_sat_u32(0),
+            StableAmount::from_sat_u32(42_000)
+        ),
         "shouldn't change after scanning"
     );
 
@@ -46,26 +69,41 @@ fn spk_txout_sent_and_received() {
         }],
         output: vec![
             TxOut {
-                value: Amount::from_sat(20_000),
+                value: LegacyAmount::from_sat(20_000),
                 script_pubkey: spk2,
             },
             TxOut {
                 script_pubkey: spk1,
-                value: Amount::from_sat(30_000),
+                value: LegacyAmount::from_sat(30_000),
             },
         ],
     };
 
     assert_eq!(
         index.sent_and_received(&tx2, ..),
-        (sat(42_000), sat(50_000))
+        (
+            StableAmount::from_sat_u32(42_000),
+            StableAmount::from_sat_u32(50_000)
+        )
     );
     assert_eq!(
         index.sent_and_received(&tx2, ..1),
-        (sat(42_000), sat(30_000))
+        (
+            StableAmount::from_sat_u32(42_000),
+            StableAmount::from_sat_u32(30_000)
+        )
     );
-    assert_eq!(index.sent_and_received(&tx2, 1..), (sat(0), sat(20_000)));
-    assert_eq!(index.net_value(&tx2, ..), ssat(8_000));
+    assert_eq!(
+        index.sent_and_received(&tx2, 1..),
+        (
+            StableAmount::from_sat_u32(0),
+            StableAmount::from_sat_u32(20_000)
+        )
+    );
+    assert_eq!(
+        index.net_value(&tx2, ..),
+        StableSignedAmount::from_sat_i32(8_000)
+    );
 }
 
 #[test]
@@ -82,7 +120,7 @@ fn spk_txout_spent_created_txouts() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+            value: LegacyAmount::from_sat(42_000),
             script_pubkey: spk0.clone(),
         }],
     };
@@ -100,7 +138,7 @@ fn spk_txout_spent_created_txouts() {
                 vout: 0,
             },
             txout: TxOut {
-                value: Amount::from_sat(42_000),
+                value: LegacyAmount::from_sat(42_000),
                 script_pubkey: spk0.clone(),
             },
             spk_index: 0,
@@ -119,12 +157,12 @@ fn spk_txout_spent_created_txouts() {
         }],
         output: vec![
             TxOut {
-                value: Amount::from_sat(20_000),
+                value: LegacyAmount::from_sat(20_000),
                 script_pubkey: spk1.clone(),
             },
             TxOut {
                 script_pubkey: spk0.clone(),
-                value: Amount::from_sat(30_000),
+                value: LegacyAmount::from_sat(30_000),
             },
         ],
     };
@@ -136,7 +174,7 @@ fn spk_txout_spent_created_txouts() {
         spent_txouts[0],
         SpentTxOut {
             txout: TxOut {
-                value: Amount::from_sat(42_000),
+                value: LegacyAmount::from_sat(42_000),
                 script_pubkey: spk0.clone(),
             },
             spending_input: TxIn {
@@ -161,7 +199,7 @@ fn spk_txout_spent_created_txouts() {
                 vout: 0,
             },
             txout: TxOut {
-                value: Amount::from_sat(20_000),
+                value: LegacyAmount::from_sat(20_000),
                 script_pubkey: spk1.clone(),
             },
             spk_index: 1,
@@ -175,7 +213,7 @@ fn spk_txout_spent_created_txouts() {
                 vout: 1,
             },
             txout: TxOut {
-                value: Amount::from_sat(30_000),
+                value: LegacyAmount::from_sat(30_000),
                 script_pubkey: spk0.clone(),
             },
             spk_index: 0,
@@ -205,7 +243,7 @@ fn mark_used() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+            value: LegacyAmount::from_sat(42_000),
             script_pubkey: spk1,
         }],
     };
@@ -247,7 +285,7 @@ fn outputs_in_range_excluded_bounds() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(10_000),
+            value: LegacyAmount::from_sat(10_000),
             script_pubkey: spk1,
         }],
     };
@@ -257,7 +295,7 @@ fn outputs_in_range_excluded_bounds() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(20_000),
+            value: LegacyAmount::from_sat(20_000),
             script_pubkey: spk2,
         }],
     };
@@ -267,7 +305,7 @@ fn outputs_in_range_excluded_bounds() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(30_000),
+            value: LegacyAmount::from_sat(30_000),
             script_pubkey: spk3,
         }],
     };
@@ -277,7 +315,7 @@ fn outputs_in_range_excluded_bounds() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(40_000),
+            value: LegacyAmount::from_sat(40_000),
             script_pubkey: spk4,
         }],
     };
@@ -287,7 +325,7 @@ fn outputs_in_range_excluded_bounds() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(50_000),
+            value: LegacyAmount::from_sat(50_000),
             script_pubkey: spk5,
         }],
     };

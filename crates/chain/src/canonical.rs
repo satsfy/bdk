@@ -29,7 +29,8 @@ use core::{fmt, ops::RangeBounds};
 
 use bdk_core::BlockId;
 use bitcoin::{
-    constants::COINBASE_MATURITY, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
+    constants::COINBASE_MATURITY, Amount as LegacyAmount, OutPoint, ScriptBuf, Transaction, TxOut,
+    Txid,
 };
 
 use crate::{spk_txout::SpkTxOutIndex, Anchor, Balance, CanonicalViewTask, ChainPosition, TxGraph};
@@ -441,10 +442,10 @@ impl<A: Anchor> CanonicalView<A> {
         mut trust_predicate: impl FnMut(&O, &CanonicalTxOut<ChainPosition<A>>) -> bool,
         min_confirmations: u32,
     ) -> Balance {
-        let mut immature = Amount::ZERO;
-        let mut trusted_pending = Amount::ZERO;
-        let mut untrusted_pending = Amount::ZERO;
-        let mut confirmed = Amount::ZERO;
+        let mut immature = LegacyAmount::ZERO;
+        let mut trusted_pending = LegacyAmount::ZERO;
+        let mut untrusted_pending = LegacyAmount::ZERO;
+        let mut confirmed = LegacyAmount::ZERO;
 
         for (spk_i, txout) in self.filter_unspent_outpoints(outpoints) {
             match &txout.pos {

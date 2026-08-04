@@ -1,5 +1,8 @@
 use bdk_chain::{
-    bitcoin::{compat::Amount, hashes::Hash, Address, Amount as BtcAmount, ScriptBuf, WScriptHash},
+    bitcoin::{
+        compat::Amount as StableAmount, hashes::Hash, Address, Amount as LegacyAmount, ScriptBuf,
+        WScriptHash,
+    },
     local_chain::LocalChain,
     spk_client::{FullScanRequest, SyncRequest, SyncResponse},
     spk_txout::SpkTxOutIndex,
@@ -100,8 +103,8 @@ where
 // replaced transaction as missing.
 #[test]
 pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
-    const SEND_TX_FEE: BtcAmount = BtcAmount::from_sat(1000);
-    const UNDO_SEND_TX_FEE: BtcAmount = BtcAmount::from_sat(2000);
+    const SEND_TX_FEE: LegacyAmount = LegacyAmount::from_sat(1000);
+    const UNDO_SEND_TX_FEE: LegacyAmount = LegacyAmount::from_sat(2000);
 
     let env = TestEnv::new()?;
     let rpc_client = env.rpc_client();
@@ -124,7 +127,7 @@ pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
         .0
         .into_iter()
         // Find a block reward tx.
-        .find(|utxo| utxo.amount == BtcAmount::from_int_btc(50).to_btc())
+        .find(|utxo| utxo.amount == LegacyAmount::from_int_btc(50).to_btc())
         .expect("Must find a block reward UTXO")
         .into_model()?;
 
@@ -239,7 +242,7 @@ pub fn chained_mempool_tx_sync() -> anyhow::Result<()> {
     env.mine_blocks(100, None)?;
 
     // First unconfirmed tx.
-    let txid1 = env.send(&tracked_addr, Amount::from_btc(1.0)?)?;
+    let txid1 = env.send(&tracked_addr, StableAmount::from_btc(1.0)?)?;
 
     let raw_tx = rpc_client.get_raw_transaction(txid1)?.transaction()?;
     let (vout, utxo) = raw_tx
@@ -258,7 +261,7 @@ pub fn chained_mempool_tx_sync() -> anyhow::Result<()> {
             }],
             &[Output::new(
                 tracked_addr.clone(),
-                utxo.value - BtcAmount::from_sat(1000),
+                utxo.value - LegacyAmount::from_sat(1000),
             )],
         )?
         .transaction()?;
@@ -315,12 +318,12 @@ pub fn test_update_tx_graph_without_keychain() -> anyhow::Result<()> {
     let txid1 = env
         .bitcoind
         .client
-        .send_to_address(&receive_address1, BtcAmount::from_sat(10000))?
+        .send_to_address(&receive_address1, LegacyAmount::from_sat(10000))?
         .txid()?;
     let txid2 = env
         .bitcoind
         .client
-        .send_to_address(&receive_address0, BtcAmount::from_sat(20000))?
+        .send_to_address(&receive_address0, LegacyAmount::from_sat(20000))?
         .txid()?;
     env.mine_blocks(1, None)?;
     env.wait_until_electrum_sees_block(Duration::from_secs(6))?;
@@ -414,7 +417,7 @@ pub fn test_update_tx_graph_stop_gap() -> anyhow::Result<()> {
     let txid_4th_addr = env
         .bitcoind
         .client
-        .send_to_address(&addresses[3], BtcAmount::from_sat(10000))?
+        .send_to_address(&addresses[3], LegacyAmount::from_sat(10000))?
         .txid()?;
     env.mine_blocks(1, None)?;
     env.wait_until_electrum_sees_block(Duration::from_secs(6))?;
@@ -453,7 +456,10 @@ pub fn test_update_tx_graph_stop_gap() -> anyhow::Result<()> {
     let txid_last_addr = env
         .bitcoind
         .client
-        .send_to_address(&addresses[addresses.len() - 1], BtcAmount::from_sat(10000))?
+        .send_to_address(
+            &addresses[addresses.len() - 1],
+            LegacyAmount::from_sat(10000),
+        )?
         .txid()?;
     env.mine_blocks(1, None)?;
     env.wait_until_electrum_sees_block(Duration::from_secs(6))?;
@@ -518,7 +524,7 @@ pub fn test_stop_gap_past_last_revealed() -> anyhow::Result<()> {
     let txid_last_addr = env
         .bitcoind
         .client
-        .send_to_address(&addresses[9], BtcAmount::from_sat(10000))?
+        .send_to_address(&addresses[9], LegacyAmount::from_sat(10000))?
         .txid()?;
     env.mine_blocks(1, None)?;
     env.wait_until_electrum_sees_block(Duration::from_secs(6))?;
@@ -556,7 +562,7 @@ pub fn test_stop_gap_past_last_revealed() -> anyhow::Result<()> {
 /// txouts for previous outputs were inserted for transaction fee calculation.
 #[test]
 fn test_sync() -> anyhow::Result<()> {
-    const SEND_AMOUNT: Amount = Amount::from_sat_u32(10_000);
+    const SEND_AMOUNT: StableAmount = StableAmount::from_sat_u32(10_000);
 
     let env = TestEnv::new()?;
     let electrum_client = electrum_client::Client::new(env.electrsd.electrum_url.as_str())?;
@@ -698,7 +704,7 @@ fn test_sync() -> anyhow::Result<()> {
 #[test]
 fn tx_can_become_unconfirmed_after_reorg() -> anyhow::Result<()> {
     const REORG_COUNT: usize = 8;
-    const SEND_AMOUNT: Amount = Amount::from_sat_u32(10_000);
+    const SEND_AMOUNT: StableAmount = StableAmount::from_sat_u32(10_000);
 
     let env = TestEnv::new()?;
     let electrum_client = electrum_client::Client::new(env.electrsd.electrum_url.as_str())?;
@@ -821,8 +827,8 @@ fn test_sync_with_coinbase() -> anyhow::Result<()> {
 
 #[test]
 fn test_check_fee_calculation() -> anyhow::Result<()> {
-    const SEND_AMOUNT: Amount = Amount::from_sat_u32(10_000);
-    const FEE_AMOUNT: Amount = Amount::from_sat_u32(1650);
+    const SEND_AMOUNT: StableAmount = StableAmount::from_sat_u32(10_000);
+    const FEE_AMOUNT: StableAmount = StableAmount::from_sat_u32(1650);
     let env = TestEnv::new()?;
     let electrum_client = electrum_client::Client::new(env.electrsd.electrum_url.as_str())?;
     let client = BdkElectrumClient::new(electrum_client);
@@ -924,13 +930,13 @@ fn test_check_fee_calculation() -> anyhow::Result<()> {
             .get_transaction(tx.txid)
             .expect("Tx must exist")
             .fee
-            .map(|fee| BtcAmount::from_float_in(fee.abs(), Denomination::BTC))
+            .map(|fee| LegacyAmount::from_float_in(fee.abs(), Denomination::BTC))
             .expect("Fee must exist")
             .expect("Amount parsing should succeed")
             .to_sat();
 
         // Check that the calculated fee matches the fee from the transaction data.
-        assert_eq!(fee, Amount::from_sat(tx_fee).expect("valid amount")); // 1650sat
+        assert_eq!(fee, StableAmount::from_sat(tx_fee).expect("valid amount")); // 1650sat
     }
     Ok(())
 }

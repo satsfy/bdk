@@ -137,8 +137,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bdk_core::ConfirmationBlockTime;
 pub use bdk_core::TxUpdate;
-use bitcoin::compat::{Amount, SignedAmount};
-use bitcoin::{OutPoint, Transaction, TxOut, Txid};
+use bitcoin::compat::{Amount as StableAmount, SignedAmount as StableSignedAmount};
+use bitcoin::{OutPoint, SignedAmount as LegacySignedAmount, Transaction, TxOut, Txid};
 use core::fmt::{self, Formatter};
 use core::ops::{Deref, RangeInclusive};
 
@@ -256,7 +256,7 @@ pub enum CalculateFeeError {
     /// Missing `TxOut` for one or more of the inputs of the tx
     MissingTxOut(Vec<OutPoint>),
     /// When the transaction is invalid according to the graph it has a negative fee
-    NegativeFee(SignedAmount),
+    NegativeFee(StableSignedAmount),
 }
 
 impl fmt::Display for CalculateFeeError {
@@ -412,9 +412,9 @@ impl<A> TxGraph<A> {
         })
     }
 
-    /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
-    /// transaction. Returns `OK(_)` if we have all the [`TxOut`]s being spent by `tx` in the
-    /// graph (either as the full transactions or individual txouts).
+    /// Calculates the fee of a given transaction. Returns [`StableAmount::ZERO`] if `tx` is a
+    /// coinbase transaction. Returns `OK(_)` if we have all the [`TxOut`]s being spent by `tx`
+    /// in the graph (either as the full transactions or individual txouts).
     ///
     /// To calculate the fee for a [`Transaction`] that depends on foreign [`TxOut`] values you must
     /// first manually insert the foreign TxOuts into the tx graph using the [`insert_txout`]
@@ -423,13 +423,13 @@ impl<A> TxGraph<A> {
     /// Note `tx` does not have to be in the graph for this to work.
     ///
     /// [`insert_txout`]: Self::insert_txout
-    pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
+    pub fn calculate_fee(&self, tx: &Transaction) -> Result<StableAmount, CalculateFeeError> {
         if tx.is_coinbase() {
-            return Ok(Amount::ZERO);
+            return Ok(StableAmount::ZERO);
         }
 
         let (inputs_sum, missing_outputs) = tx.input.iter().fold(
-            (bitcoin::SignedAmount::ZERO, Vec::new()),
+            (LegacySignedAmount::ZERO, Vec::new()),
             |(mut sum, mut missing_outpoints), txin| match self.get_txout(txin.previous_output) {
                 None => {
                     missing_outpoints.push(txin.previous_output);
@@ -449,7 +449,7 @@ impl<A> TxGraph<A> {
             .output
             .iter()
             .map(|txout| txout.value.to_signed().expect("valid `SignedAmount`"))
-            .sum::<bitcoin::SignedAmount>();
+            .sum::<LegacySignedAmount>();
 
         let fee = inputs_sum - outputs_sum;
         match fee.to_unsigned() {

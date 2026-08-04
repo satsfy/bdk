@@ -16,12 +16,12 @@ use bdk_testenv::{
     anyhow::{self},
     bitcoind::{Input, Output},
     block_id, hash,
-    utils::{new_tx, sat, DESCRIPTORS},
+    utils::{new_tx, DESCRIPTORS},
     TestEnv,
 };
 use bitcoin::{
-    secp256k1::Secp256k1, Address, Amount, BlockHash, Network, OutPoint, ScriptBuf, Transaction,
-    TxIn, TxOut, Txid,
+    compat::Amount as StableAmount, secp256k1::Secp256k1, Address, Amount as LegacyAmount,
+    BlockHash, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid,
 };
 use miniscript::Descriptor;
 
@@ -87,7 +87,7 @@ fn relevant_conflicts() -> anyhow::Result<()> {
                 })
                 .collect::<Vec<_>>();
             let tx_send = {
-                let outputs = [Output::new(recv_addr, Amount::from_btc(49.999_99)?)];
+                let outputs = [Output::new(recv_addr, LegacyAmount::from_btc(49.999_99)?)];
                 let tx = client
                     .create_raw_transaction(&tx_input, &outputs)?
                     .into_model()?
@@ -98,7 +98,7 @@ fn relevant_conflicts() -> anyhow::Result<()> {
                     .tx
             };
             let tx_cancel = {
-                let outputs = [Output::new(sender_addr, Amount::from_btc(49.999_98)?)];
+                let outputs = [Output::new(sender_addr, LegacyAmount::from_btc(49.999_98)?)];
                 let tx = client
                     .create_raw_transaction(&tx_input, &outputs)?
                     .into_model()?
@@ -230,11 +230,11 @@ fn insert_relevant_txs() {
     let tx_a = Transaction {
         output: vec![
             TxOut {
-                value: Amount::from_sat(10_000),
+                value: LegacyAmount::from_sat(10_000),
                 script_pubkey: spk_0,
             },
             TxOut {
-                value: Amount::from_sat(20_000),
+                value: LegacyAmount::from_sat(20_000),
                 script_pubkey: spk_1,
             },
         ],
@@ -390,7 +390,7 @@ fn test_list_owned_txouts() {
             ..Default::default()
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(70000),
+            value: LegacyAmount::from_sat(70000),
             script_pubkey: trusted_spks[0].to_owned(),
         }],
         ..new_tx(1)
@@ -399,7 +399,7 @@ fn test_list_owned_txouts() {
     // tx2 is an incoming transaction received at untrusted keychain at block 1.
     let tx2 = Transaction {
         output: vec![TxOut {
-            value: Amount::from_sat(30000),
+            value: LegacyAmount::from_sat(30000),
             script_pubkey: untrusted_spks[0].to_owned(),
         }],
         ..new_tx(2)
@@ -412,7 +412,7 @@ fn test_list_owned_txouts() {
             ..Default::default()
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(10000),
+            value: LegacyAmount::from_sat(10000),
             script_pubkey: trusted_spks[1].to_owned(),
         }],
         ..new_tx(3)
@@ -421,7 +421,7 @@ fn test_list_owned_txouts() {
     // tx4 is an external transaction receiving at untrusted keychain, unconfirmed.
     let tx4 = Transaction {
         output: vec![TxOut {
-            value: Amount::from_sat(20000),
+            value: LegacyAmount::from_sat(20000),
             script_pubkey: untrusted_spks[1].to_owned(),
         }],
         ..new_tx(4)
@@ -430,7 +430,7 @@ fn test_list_owned_txouts() {
     // tx5 is an external transaction receiving at trusted keychain, unconfirmed.
     let tx5 = Transaction {
         output: vec![TxOut {
-            value: Amount::from_sat(15000),
+            value: LegacyAmount::from_sat(15000),
             script_pubkey: trusted_spks[2].to_owned(),
         }],
         ..new_tx(5)
@@ -574,10 +574,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: sat(70000),          // immature coinbase
-                trusted_pending: sat(25000),   // tx3, tx5
-                untrusted_pending: sat(20000), // tx4
-                confirmed: sat(0)              // Nothing is confirmed yet
+                immature: StableAmount::from_sat_u32(70000), // immature coinbase
+                trusted_pending: StableAmount::from_sat_u32(25000), // tx3, tx5
+                untrusted_pending: StableAmount::from_sat_u32(20000), // tx4
+                confirmed: StableAmount::from_sat_u32(0)     // Nothing is confirmed yet
             }
         );
     }
@@ -612,10 +612,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: sat(70000),          // immature coinbase
-                trusted_pending: sat(25000),   // tx3, tx5
-                untrusted_pending: sat(20000), // tx4
-                confirmed: sat(0)              // tx2 got confirmed (but spent by 3)
+                immature: StableAmount::from_sat_u32(70000), // immature coinbase
+                trusted_pending: StableAmount::from_sat_u32(25000), // tx3, tx5
+                untrusted_pending: StableAmount::from_sat_u32(20000), // tx4
+                confirmed: StableAmount::from_sat_u32(0)     // tx2 got confirmed (but spent by 3)
             }
         );
     }
@@ -653,10 +653,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: sat(70000),          // immature coinbase
-                trusted_pending: sat(15000),   // tx5
-                untrusted_pending: sat(20000), // tx4
-                confirmed: sat(10000)          // tx3 got confirmed
+                immature: StableAmount::from_sat_u32(70000), // immature coinbase
+                trusted_pending: StableAmount::from_sat_u32(15000), // tx5
+                untrusted_pending: StableAmount::from_sat_u32(20000), // tx4
+                confirmed: StableAmount::from_sat_u32(10000)  // tx3 got confirmed
             }
         );
     }
@@ -694,10 +694,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: sat(70000),          // immature coinbase
-                trusted_pending: sat(15000),   // tx5
-                untrusted_pending: sat(20000), // tx4
-                confirmed: sat(10000)          // tx3 is confirmed
+                immature: StableAmount::from_sat_u32(70000), // immature coinbase
+                trusted_pending: StableAmount::from_sat_u32(15000), // tx5
+                untrusted_pending: StableAmount::from_sat_u32(20000), // tx4
+                confirmed: StableAmount::from_sat_u32(10000)  // tx3 is confirmed
             }
         );
     }
@@ -710,10 +710,10 @@ fn test_list_owned_txouts() {
         assert_eq!(
             balance,
             Balance {
-                immature: sat(0),              // coinbase matured
-                trusted_pending: sat(15000),   // tx5
-                untrusted_pending: sat(20000), // tx4
-                confirmed: sat(80000)          // tx1 + tx3
+                immature: StableAmount::from_sat_u32(0), // coinbase matured
+                trusted_pending: StableAmount::from_sat_u32(15000), // tx5
+                untrusted_pending: StableAmount::from_sat_u32(20000), // tx4
+                confirmed: StableAmount::from_sat_u32(80000)  // tx1 + tx3
             }
         );
     }
@@ -805,7 +805,7 @@ fn test_get_chain_position() {
             name: "tx no anchors or last_seen - no chain pos",
             tx: Transaction {
                 output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                    value: LegacyAmount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(0)
@@ -818,7 +818,7 @@ fn test_get_chain_position() {
             name: "tx last_seen - unconfirmed",
             tx: Transaction {
                 output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                    value: LegacyAmount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(1)
@@ -834,7 +834,7 @@ fn test_get_chain_position() {
             name: "tx anchor in best chain - confirmed",
             tx: Transaction {
                 output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                    value: LegacyAmount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(2)
@@ -850,7 +850,7 @@ fn test_get_chain_position() {
             name: "tx unknown anchor with last_seen - unconfirmed",
             tx: Transaction {
                 output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                    value: LegacyAmount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(3)
@@ -866,7 +866,7 @@ fn test_get_chain_position() {
             name: "tx unknown anchor - unconfirmed",
             tx: Transaction {
                 output: vec![TxOut {
-                    value: Amount::ONE_BTC,
+                    value: LegacyAmount::ONE_BTC,
                     script_pubkey: spk.clone(),
                 }],
                 ..new_tx(4)

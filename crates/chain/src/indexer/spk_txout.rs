@@ -7,8 +7,10 @@ use crate::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
     Indexer,
 };
-use bitcoin::compat::{Amount, SignedAmount};
-use bitcoin::{OutPoint, Script, ScriptBuf, Transaction, TxIn, TxOut, Txid};
+use bitcoin::compat::{Amount as StableAmount, SignedAmount as StableSignedAmount};
+use bitcoin::{
+    Amount as LegacyAmount, OutPoint, Script, ScriptBuf, Transaction, TxIn, TxOut, Txid,
+};
 
 /// An index storing [`TxOut`]s that have a script pubkey that matches those in a list.
 ///
@@ -297,9 +299,9 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         &self,
         tx: &Transaction,
         range: impl RangeBounds<I>,
-    ) -> (Amount, Amount) {
-        let mut sent = bitcoin::Amount::ZERO;
-        let mut received = bitcoin::Amount::ZERO;
+    ) -> (StableAmount, StableAmount) {
+        let mut sent = LegacyAmount::ZERO;
+        let mut received = LegacyAmount::ZERO;
 
         for txin in &tx.input {
             if let Some((index, txout)) = self.txout(txin.previous_output) {
@@ -430,7 +432,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// for calling [`sent_and_received`] and subtracting sent from received.
     ///
     /// [`sent_and_received`]: Self::sent_and_received
-    pub fn net_value(&self, tx: &Transaction, range: impl RangeBounds<I>) -> SignedAmount {
+    pub fn net_value(&self, tx: &Transaction, range: impl RangeBounds<I>) -> StableSignedAmount {
         let (sent, received) = self.sent_and_received(tx, range);
         (received.to_signed() - sent.to_signed())
             .expect("difference of in-range amounts is in range")

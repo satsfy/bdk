@@ -67,19 +67,6 @@ macro_rules! changeset {
     }};
 }
 
-/// Shorthand for constructing a stable [`Amount`](bitcoin::compat::Amount) from satoshis.
-#[allow(unused)]
-pub fn sat(sats: u64) -> bitcoin::compat::Amount {
-    bitcoin::compat::Amount::from_sat(sats).expect("amount within valid range")
-}
-
-/// Shorthand for constructing a stable [`SignedAmount`](bitcoin::compat::SignedAmount) from
-/// satoshis.
-#[allow(unused)]
-pub fn ssat(sats: i64) -> bitcoin::compat::SignedAmount {
-    bitcoin::compat::SignedAmount::from_sat(sats).expect("amount within valid range")
-}
-
 #[allow(unused)]
 pub fn new_tx(lt: u32) -> bitcoin::Transaction {
     bitcoin::Transaction {

@@ -1,1 +1,6 @@
 msrv="1.85.0"
+
+disallowed-types = [
+    { path = "bitcoin::Amount", reason = "pre-1.0 amount, use bitcoin::compat::Amount" },
+    { path = "bitcoin::SignedAmount", reason = "pre-1.0 amount, use bitcoin::compat::SignedAmount" },
+]

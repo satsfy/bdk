@@ -127,7 +127,7 @@ pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
         .0
         .into_iter()
         // Find a block reward tx.
-        .find(|utxo| utxo.amount == LegacyAmount::from_int_btc(50).to_btc())
+        .find(|utxo| utxo.amount == StableAmount::FIFTY_BTC.to_btc())
         .expect("Must find a block reward UTXO")
         .into_model()?;
 
@@ -242,7 +242,7 @@ pub fn chained_mempool_tx_sync() -> anyhow::Result<()> {
     env.mine_blocks(100, None)?;
 
     // First unconfirmed tx.
-    let txid1 = env.send(&tracked_addr, StableAmount::from_btc(1.0)?)?;
+    let txid1 = env.send(&tracked_addr, StableAmount::ONE_BTC)?;
 
     let raw_tx = rpc_client.get_raw_transaction(txid1)?.transaction()?;
     let (vout, utxo) = raw_tx

@@ -44,7 +44,7 @@ pub fn detect_receive_tx_cancel() -> anyhow::Result<()> {
         .0
         .into_iter()
         // Find a block reward tx.
-        .find(|utxo| utxo.amount == Amount::from_int_btc(50).to_btc())
+        .find(|utxo| utxo.amount == bdk_chain::bitcoin::compat::Amount::FIFTY_BTC.to_btc())
         .expect("Must find a block reward UTXO")
         .into_model()?;
 
@@ -231,7 +231,7 @@ pub fn test_update_tx_graph_without_keychain() -> anyhow::Result<()> {
         // Check that the calculated fee matches the fee from the transaction data.
         assert_eq!(
             fee,
-            Amount::from_float_in(tx_fee, bdk_core::bitcoin::Denomination::Bitcoin)?
+            Amount::from_float_in(tx_fee, bdk_core::bitcoin::Denomination::Bitcoin)?.to_stable()?
         );
     }
 

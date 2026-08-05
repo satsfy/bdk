@@ -3,9 +3,10 @@
 pub mod utils;
 
 use anyhow::Context;
+use bdk_chain::bitcoin::compat::Amount as StableAmount;
 use bdk_chain::bitcoin::{
     block::Header, hash_types::TxMerkleNode, hex::FromHex, script::PushBytesBuf, transaction,
-    Address, Amount, Block, BlockHash, ScriptBuf, Transaction, TxIn, TxOut, Txid,
+    Address, Amount as LegacyAmount, Block, BlockHash, ScriptBuf, Transaction, TxIn, TxOut, Txid,
 };
 use bdk_chain::CheckPoint;
 use bitcoin::address::NetworkChecked;
@@ -199,7 +200,7 @@ impl TestEnv {
         };
 
         let coinbase_outputs = if params.empty {
-            let tx_fees: Amount = bt
+            let tx_fees: LegacyAmount = bt
                 .transactions
                 .iter()
                 .map(|tx| tx.fee.to_unsigned().expect("fee must be positive"))
@@ -226,7 +227,7 @@ impl TestEnv {
                     .as_ref()
                     .map(|s| -> Result<_, HexToBytesError> {
                         Ok(TxOut {
-                            value: Amount::ZERO,
+                            value: LegacyAmount::ZERO,
                             script_pubkey: ScriptBuf::from_hex(s)?,
                         })
                     })
@@ -390,11 +391,15 @@ impl TestEnv {
     }
 
     /// Send a tx of a given `amount` to a given `address`.
-    pub fn send(&self, address: &Address<NetworkChecked>, amount: Amount) -> anyhow::Result<Txid> {
+    pub fn send(
+        &self,
+        address: &Address<NetworkChecked>,
+        amount: StableAmount,
+    ) -> anyhow::Result<Txid> {
         let txid = self
             .bitcoind
             .client
-            .send_to_address(address, amount)?
+            .send_to_address(address, LegacyAmount::from_stable(amount))?
             .txid()?;
         Ok(txid)
     }
@@ -425,8 +430,8 @@ impl TestEnv {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test {
     use crate::{MineParams, TestEnv};
+    use bdk_chain::bitcoin::compat::Amount as StableAmount;
     use bdk_chain::bitcoin::opcodes::OP_TRUE;
-    use bdk_chain::bitcoin::Amount;
     use core::time::Duration;
     use electrsd::bitcoind::anyhow::Result;
     use std::collections::BTreeSet;
@@ -496,9 +501,9 @@ mod test {
         );
 
         // Now try mining with min time & some txs.
-        let txid1 = env.send(&addr, Amount::from_sat(100_000))?;
-        let txid2 = env.send(&addr, Amount::from_sat(200_000))?;
-        let txid3 = env.send(&addr, Amount::from_sat(300_000))?;
+        let txid1 = env.send(&addr, StableAmount::from_sat_u32(100_000))?;
+        let txid2 = env.send(&addr, StableAmount::from_sat_u32(200_000))?;
+        let txid3 = env.send(&addr, StableAmount::from_sat_u32(300_000))?;
         let min_time = env.get_block_template()?.min_time;
         let (_b_height, b_hash) = env.mine_block(MineParams {
             empty: false,

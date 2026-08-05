@@ -44,7 +44,7 @@ pub async fn detect_receive_tx_cancel() -> anyhow::Result<()> {
         .0
         .into_iter()
         // Find a block reward tx.
-        .find(|utxo| utxo.amount == Amount::from_int_btc(50).to_btc())
+        .find(|utxo| utxo.amount == bdk_chain::bitcoin::compat::Amount::FIFTY_BTC.to_btc())
         .expect("Must find a block reward UTXO")
         .into_model()?;
 
@@ -231,7 +231,9 @@ pub async fn test_update_tx_graph_without_keychain() -> anyhow::Result<()> {
             .expect("Fee must exist")
             .abs()
             .to_unsigned()
-            .expect("valid `Amount`");
+            .expect("valid `Amount`")
+            .to_stable()
+            .expect("valid amount range");
 
         // Check that the calculated fee matches the fee from the transaction data.
         assert_eq!(fee, tx_fee);

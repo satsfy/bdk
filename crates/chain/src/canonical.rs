@@ -28,9 +28,8 @@ use alloc::vec::Vec;
 use core::{fmt, ops::RangeBounds};
 
 use bdk_core::BlockId;
-use bitcoin::{
-    constants::COINBASE_MATURITY, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
-};
+use bitcoin::compat::{Amount, NumOpResult};
+use bitcoin::{constants::COINBASE_MATURITY, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 
 use crate::{spk_txout::SpkTxOutIndex, Anchor, Balance, CanonicalViewTask, ChainPosition, TxGraph};
 
@@ -441,12 +440,17 @@ impl<A: Anchor> CanonicalView<A> {
         mut trust_predicate: impl FnMut(&O, &CanonicalTxOut<ChainPosition<A>>) -> bool,
         min_confirmations: u32,
     ) -> Balance {
-        let mut immature = Amount::ZERO;
-        let mut trusted_pending = Amount::ZERO;
-        let mut untrusted_pending = Amount::ZERO;
-        let mut confirmed = Amount::ZERO;
+        let mut immature = NumOpResult::Valid(Amount::ZERO);
+        let mut trusted_pending = NumOpResult::Valid(Amount::ZERO);
+        let mut untrusted_pending = NumOpResult::Valid(Amount::ZERO);
+        let mut confirmed = NumOpResult::Valid(Amount::ZERO);
 
         for (spk_i, txout) in self.filter_unspent_outpoints(outpoints) {
+            let value = txout
+                .txout
+                .value
+                .to_stable()
+                .expect("txout value within valid amount range");
             match &txout.pos {
                 ChainPosition::Confirmed { anchor, .. } => {
                     let confirmation_height = anchor.confirmation_height_upper_bound();
@@ -460,31 +464,31 @@ impl<A: Anchor> CanonicalView<A> {
                     if confirmations < min_confirmations {
                         // Not enough confirmations, treat as trusted/untrusted pending
                         if trust_predicate(&spk_i, &txout) {
-                            trusted_pending += txout.txout.value;
+                            trusted_pending += value;
                         } else {
-                            untrusted_pending += txout.txout.value;
+                            untrusted_pending += value;
                         }
                     } else if txout.is_confirmed_and_spendable(self.tip.height) {
-                        confirmed += txout.txout.value;
+                        confirmed += value;
                     } else if !txout.is_mature(self.tip.height) {
-                        immature += txout.txout.value;
+                        immature += value;
                     }
                 }
                 ChainPosition::Unconfirmed { .. } => {
                     if trust_predicate(&spk_i, &txout) {
-                        trusted_pending += txout.txout.value;
+                        trusted_pending += value;
                     } else {
-                        untrusted_pending += txout.txout.value;
+                        untrusted_pending += value;
                     }
                 }
             }
         }
 
         Balance {
-            immature,
-            trusted_pending,
-            untrusted_pending,
-            confirmed,
+            immature: immature.expect("balance cannot exceed supply"),
+            trusted_pending: trusted_pending.expect("balance cannot exceed supply"),
+            untrusted_pending: untrusted_pending.expect("balance cannot exceed supply"),
+            confirmed: confirmed.expect("balance cannot exceed supply"),
         }
     }
 }

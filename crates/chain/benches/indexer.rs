@@ -86,7 +86,12 @@ fn do_bench(indexed_tx_graph: &KeychainTxGraph, chain: &LocalChain) {
     let bal = chain
         .canonical_view(graph.graph(), chain.tip().block_id(), Default::default())
         .balance(op, |_, _| false, 1);
-    assert_eq!(bal.total(), AMOUNT * TX_CT as u64);
+    assert_eq!(
+        bal.total(),
+        (AMOUNT * TX_CT as u64)
+            .to_stable()
+            .expect("amount within valid range")
+    );
 }
 
 pub fn reindex_tx_graph(c: &mut Criterion) {

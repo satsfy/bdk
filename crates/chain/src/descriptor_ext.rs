@@ -1,6 +1,6 @@
 use crate::miniscript::{Descriptor, DescriptorPublicKey};
+use bitcoin::compat::Amount;
 use bitcoin::hashes::{hash_newtype, sha256, Hash};
-use bitcoin::Amount;
 
 hash_newtype! {
     /// Represents the unique ID of a descriptor.
@@ -29,6 +29,8 @@ impl DescriptorExt for Descriptor<DescriptorPublicKey> {
             .expect("descriptor can't have hardened derivation")
             .script_pubkey()
             .minimal_non_dust()
+            .to_stable()
+            .expect("dust value within valid amount range")
     }
 
     fn descriptor_id(&self) -> DescriptorId {

@@ -1,4 +1,5 @@
-use bdk_chain::bitcoin::{Address, Amount, ScriptBuf};
+use bdk_chain::bitcoin::compat::Amount;
+use bdk_chain::bitcoin::{Address, ScriptBuf};
 use bdk_core::{
     bitcoin::{
         consensus::WriteExt,
@@ -64,7 +65,7 @@ pub fn test_sync_performance(c: &mut Criterion) {
     for i in 0..NUM_BLOCKS {
         let spk = get_test_spk(i);
         let addr = Address::from_script(&spk, Network::Regtest).unwrap();
-        env.send(&addr, Amount::from_sat(10_000)).unwrap();
+        env.send(&addr, Amount::from_sat_u32(10_000)).unwrap();
         env.mine_blocks(1, None).unwrap();
 
         spks.push(spk);

@@ -137,7 +137,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bdk_core::ConfirmationBlockTime;
 pub use bdk_core::TxUpdate;
-use bitcoin::{Amount, OutPoint, SignedAmount, Transaction, TxOut, Txid};
+use bitcoin::compat::{Amount as StableAmount, NumOpResult, SignedAmount as StableSignedAmount};
+use bitcoin::{OutPoint, Transaction, TxOut, Txid};
 use core::fmt::{self, Formatter};
 use core::ops::{Deref, RangeInclusive};
 
@@ -269,7 +270,9 @@ pub enum CalculateFeeError {
     /// Missing `TxOut` for one or more of the inputs of the tx
     MissingTxOut(Vec<OutPoint>),
     /// When the transaction is invalid according to the graph it has a negative fee
-    NegativeFee(SignedAmount),
+    NegativeFee(StableSignedAmount),
+    /// A txout value, or a sum of txout values, is outside the valid range of a stable `Amount`
+    AmountOutOfRange,
 }
 
 impl fmt::Display for CalculateFeeError {
@@ -301,6 +304,9 @@ impl fmt::Display for CalculateFeeError {
                     fee.display_dynamic()
                 )?;
                 Ok(())
+            }
+            CalculateFeeError::AmountOutOfRange => {
+                write!(f, "cannot calculate fee, amount out of valid range")
             }
         }
     }
@@ -425,9 +431,9 @@ impl<A> TxGraph<A> {
         })
     }
 
-    /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
-    /// transaction. Returns `OK(_)` if we have all the [`TxOut`]s being spent by `tx` in the
-    /// graph (either as the full transactions or individual txouts).
+    /// Calculates the fee of a given transaction. Returns [`StableAmount::ZERO`] if `tx` is a
+    /// coinbase transaction. Returns `OK(_)` if we have all the [`TxOut`]s being spent by `tx`
+    /// in the graph (either as the full transactions or individual txouts).
     ///
     /// To calculate the fee for a [`Transaction`] that depends on foreign [`TxOut`] values you must
     /// first manually insert the foreign TxOuts into the tx graph using the [`insert_txout`]
@@ -436,35 +442,41 @@ impl<A> TxGraph<A> {
     /// Note `tx` does not have to be in the graph for this to work.
     ///
     /// [`insert_txout`]: Self::insert_txout
-    pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
+    pub fn calculate_fee(&self, tx: &Transaction) -> Result<StableAmount, CalculateFeeError> {
         if tx.is_coinbase() {
-            return Ok(Amount::ZERO);
+            return Ok(StableAmount::ZERO);
         }
 
-        let (inputs_sum, missing_outputs) = tx.input.iter().fold(
-            (SignedAmount::ZERO, Vec::new()),
-            |(mut sum, mut missing_outpoints), txin| match self.get_txout(txin.previous_output) {
-                None => {
-                    missing_outpoints.push(txin.previous_output);
-                    (sum, missing_outpoints)
-                }
+        let mut missing_outputs = Vec::new();
+        let mut inputs_sum = NumOpResult::Valid(StableAmount::ZERO);
+        for txin in &tx.input {
+            match self.get_txout(txin.previous_output) {
+                None => missing_outputs.push(txin.previous_output),
                 Some(txout) => {
-                    sum += txout.value.to_signed().expect("valid `SignedAmount`");
-                    (sum, missing_outpoints)
+                    inputs_sum += txout
+                        .value
+                        .to_stable()
+                        .map_err(|_| CalculateFeeError::AmountOutOfRange)?;
                 }
-            },
-        );
+            }
+        }
         if !missing_outputs.is_empty() {
             return Err(CalculateFeeError::MissingTxOut(missing_outputs));
         }
+        let inputs_sum = inputs_sum.ok().ok_or(CalculateFeeError::AmountOutOfRange)?;
 
-        let outputs_sum = tx
-            .output
-            .iter()
-            .map(|txout| txout.value.to_signed().expect("valid `SignedAmount`"))
-            .sum::<SignedAmount>();
+        let mut outputs_sum = NumOpResult::Valid(StableAmount::ZERO);
+        for txout in &tx.output {
+            outputs_sum += txout
+                .value
+                .to_stable()
+                .map_err(|_| CalculateFeeError::AmountOutOfRange)?;
+        }
+        let outputs_sum = outputs_sum
+            .ok()
+            .ok_or(CalculateFeeError::AmountOutOfRange)?;
 
-        let fee = inputs_sum - outputs_sum;
+        let fee = inputs_sum.signed_sub(outputs_sum);
         fee.to_unsigned()
             .map_err(|_| CalculateFeeError::NegativeFee(fee))
     }

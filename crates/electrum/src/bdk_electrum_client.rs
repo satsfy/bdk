@@ -742,7 +742,7 @@ fn chain_update(
 #[allow(unused_imports)]
 mod test {
     use crate::{bdk_electrum_client::TxUpdate, electrum_client::ElectrumApi, BdkElectrumClient};
-    use bdk_chain::bitcoin::Amount;
+    use bdk_chain::bitcoin::compat::Amount;
     use bdk_chain::bitcoin::{constants, Network, OutPoint, ScriptBuf, Transaction, TxIn};
     use bdk_chain::CheckPoint;
     use bdk_core::{collections::BTreeMap, spk_client::SyncRequest};
@@ -832,7 +832,7 @@ mod test {
             .get_new_address(None, None)?
             .address()?
             .assume_checked();
-        let txid = env.send(&addr, Amount::from_sat(50_000))?;
+        let txid = env.send(&addr, Amount::from_sat_u32(50_000))?;
 
         // Mine block that confirms transaction.
         env.mine_blocks(1, None)?;

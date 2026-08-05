@@ -18,7 +18,9 @@ workspace = true
 [dependencies]
 bdk_chain = { path = "../chain", version = "0.23.1", default-features = false }
 electrsd = { version = "0.38.0", features = [ "legacy" ], default-features = false }
-bitcoin = { version = "0.32.0", default-features = false }
+# The compat feature is supplied by the workspace [patch.crates-io] redirect.
+bitcoin = { version = "0.32", default-features = false, features = ["compat"] }
+bitcoin-units = { version = "0.1.101", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 bdk_testenv = { path = "." }

@@ -10,10 +10,11 @@ use bdk_chain::{
     Anchor, ChainPosition, Merge,
 };
 use bdk_testenv::{block_id, hash, utils::new_tx};
+use bitcoin::compat::{Amount as StableAmount, SignedAmount as StableSignedAmount};
 use bitcoin::hex::FromHex;
 use bitcoin::Witness;
 use bitcoin::{
-    absolute, hashes::Hash, transaction, Amount, BlockHash, OutPoint, ScriptBuf, SignedAmount,
+    absolute, hashes::Hash, transaction, Amount as LegacyAmount, BlockHash, OutPoint, ScriptBuf,
     Transaction, TxIn, TxOut, Txid,
 };
 use common::*;
@@ -29,14 +30,14 @@ fn insert_txouts() {
         (
             OutPoint::new(hash!("tx1"), 1),
             TxOut {
-                value: Amount::from_sat(10_000),
+                value: LegacyAmount::from_sat(10_000),
                 script_pubkey: ScriptBuf::new(),
             },
         ),
         (
             OutPoint::new(hash!("tx1"), 2),
             TxOut {
-                value: Amount::from_sat(20_000),
+                value: LegacyAmount::from_sat(20_000),
                 script_pubkey: ScriptBuf::new(),
             },
         ),
@@ -46,7 +47,7 @@ fn insert_txouts() {
     let update_ops = [(
         OutPoint::new(hash!("tx2"), 0),
         TxOut {
-            value: Amount::from_sat(20_000),
+            value: LegacyAmount::from_sat(20_000),
             script_pubkey: ScriptBuf::new(),
         },
     )];
@@ -60,7 +61,7 @@ fn insert_txouts() {
             ..Default::default()
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(30_000),
+            value: LegacyAmount::from_sat(30_000),
             script_pubkey: ScriptBuf::new(),
         }],
     };
@@ -136,14 +137,14 @@ fn insert_txouts() {
             (
                 1u32,
                 &TxOut {
-                    value: Amount::from_sat(10_000),
+                    value: LegacyAmount::from_sat(10_000),
                     script_pubkey: ScriptBuf::new(),
                 }
             ),
             (
                 2u32,
                 &TxOut {
-                    value: Amount::from_sat(20_000),
+                    value: LegacyAmount::from_sat(20_000),
                     script_pubkey: ScriptBuf::new(),
                 }
             )
@@ -158,7 +159,7 @@ fn insert_txouts() {
         [(
             0u32,
             &TxOut {
-                value: Amount::from_sat(30_000),
+                value: LegacyAmount::from_sat(30_000),
                 script_pubkey: ScriptBuf::new()
             }
         )]
@@ -270,7 +271,7 @@ fn insert_tx_displaces_txouts() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+            value: LegacyAmount::from_sat(42_000),
             script_pubkey: ScriptBuf::default(),
         }],
     };
@@ -301,7 +302,7 @@ fn insert_tx_witness_precedence() {
             witness: Witness::default(),
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(24_000),
+            value: LegacyAmount::from_sat(24_000),
             script_pubkey: ScriptBuf::default(),
         }],
     };
@@ -425,7 +426,7 @@ fn insert_txout_does_not_displace_tx() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(42_000),
+            value: LegacyAmount::from_sat(42_000),
             script_pubkey: ScriptBuf::new(),
         }],
     };
@@ -438,7 +439,7 @@ fn insert_txout_does_not_displace_tx() {
             vout: 0,
         },
         TxOut {
-            value: Amount::from_sat(1_337_000),
+            value: LegacyAmount::from_sat(1_337_000),
             script_pubkey: ScriptBuf::new(),
         },
     );
@@ -449,7 +450,7 @@ fn insert_txout_does_not_displace_tx() {
             vout: 1,
         },
         TxOut {
-            value: Amount::from_sat(1_000_000_000),
+            value: LegacyAmount::from_sat(1_000_000_000),
             script_pubkey: ScriptBuf::new(),
         },
     );
@@ -462,7 +463,7 @@ fn insert_txout_does_not_displace_tx() {
             })
             .unwrap()
             .value,
-        Amount::from_sat(42_000)
+        LegacyAmount::from_sat(42_000)
     );
     assert_eq!(
         tx_graph.get_txout(OutPoint {
@@ -481,7 +482,7 @@ fn test_calculate_fee() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(100),
+            value: LegacyAmount::from_sat(100),
             script_pubkey: ScriptBuf::new(),
         }],
     };
@@ -490,7 +491,7 @@ fn test_calculate_fee() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut {
-            value: Amount::from_sat(200),
+            value: LegacyAmount::from_sat(200),
             script_pubkey: ScriptBuf::new(),
         }],
     };
@@ -501,7 +502,7 @@ fn test_calculate_fee() {
             vout: 0,
         },
         TxOut {
-            value: Amount::from_sat(300),
+            value: LegacyAmount::from_sat(300),
             script_pubkey: ScriptBuf::new(),
         },
     );
@@ -534,19 +535,24 @@ fn test_calculate_fee() {
             },
         ],
         output: vec![TxOut {
-            value: Amount::from_sat(500),
+            value: LegacyAmount::from_sat(500),
             script_pubkey: ScriptBuf::new(),
         }],
     };
 
-    assert_eq!(graph.calculate_fee(&tx), Ok(Amount::from_sat(100)));
+    assert_eq!(
+        graph.calculate_fee(&tx),
+        Ok(StableAmount::from_sat_u32(100))
+    );
 
     tx.input.remove(2);
 
     // fee would be negative, should return CalculateFeeError::NegativeFee
     assert_eq!(
         graph.calculate_fee(&tx),
-        Err(CalculateFeeError::NegativeFee(SignedAmount::from_sat(-200)))
+        Err(CalculateFeeError::NegativeFee(
+            StableSignedAmount::from_sat_i32(-200)
+        ))
     );
 
     // If we have an unknown outpoint, fee should return CalculateFeeError::MissingTxOut.
@@ -578,7 +584,7 @@ fn test_calculate_fee_on_coinbase() {
 
     let graph = TxGraph::<()>::default();
 
-    assert_eq!(graph.calculate_fee(&tx), Ok(Amount::ZERO));
+    assert_eq!(graph.calculate_fee(&tx), Ok(StableAmount::from_sat_u32(0)));
 }
 
 // `test_walk_ancestors` uses the following transaction structure:
@@ -947,11 +953,11 @@ fn test_chain_spends() {
         input: vec![],
         output: vec![
             TxOut {
-                value: Amount::from_sat(10_000),
+                value: LegacyAmount::from_sat(10_000),
                 script_pubkey: ScriptBuf::new(),
             },
             TxOut {
-                value: Amount::from_sat(20_000),
+                value: LegacyAmount::from_sat(20_000),
                 script_pubkey: ScriptBuf::new(),
             },
         ],
@@ -966,11 +972,11 @@ fn test_chain_spends() {
         }],
         output: vec![
             TxOut {
-                value: Amount::from_sat(5_000),
+                value: LegacyAmount::from_sat(5_000),
                 script_pubkey: ScriptBuf::new(),
             },
             TxOut {
-                value: Amount::from_sat(5_000),
+                value: LegacyAmount::from_sat(5_000),
                 script_pubkey: ScriptBuf::new(),
             },
         ],
@@ -985,11 +991,11 @@ fn test_chain_spends() {
         }],
         output: vec![
             TxOut {
-                value: Amount::from_sat(10_000),
+                value: LegacyAmount::from_sat(10_000),
                 script_pubkey: ScriptBuf::new(),
             },
             TxOut {
-                value: Amount::from_sat(10_000),
+                value: LegacyAmount::from_sat(10_000),
                 script_pubkey: ScriptBuf::new(),
             },
         ],
@@ -1359,7 +1365,7 @@ fn tx_graph_update_conversion() {
 
     fn make_txout(a: u64) -> TxOut {
         TxOut {
-            value: Amount::from_sat(a),
+            value: LegacyAmount::from_sat(a),
             script_pubkey: ScriptBuf::default(),
         }
     }
@@ -1536,7 +1542,7 @@ fn test_get_first_seen_of_a_tx() {
             ..Default::default()
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(50_000),
+            value: LegacyAmount::from_sat(50_000),
             script_pubkey: ScriptBuf::new(),
         }],
     };
